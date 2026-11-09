@@ -109,3 +109,57 @@ test('creates activities in both views, layouts, and reopens a downloaded SQLite
   await expect(page.locator('.plan-node')).toHaveCount(3);
   await expect(page.locator('.project-heading')).toContainText('File Round Trip');
 });
+
+test('team owner and effort proposals support accept, keep and undo', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Create New Project', exact: true }).click();
+  await page.getByRole('button', { name: 'Create / apply', exact: true }).click();
+  await page.getByRole('button', { name: 'Team', exact: true }).click();
+  await page.getByRole('button', { name: 'Add person', exact: true }).click();
+  const teamDialog = page.getByRole('dialog', { name: 'Project team' });
+  const name = teamDialog.getByRole('textbox').last();
+  await name.fill('Marco'); await name.press('Tab');
+  const allocation = teamDialog.getByRole('spinbutton');
+  await allocation.fill('50'); await allocation.press('Tab');
+  await page.getByRole('button', { name: 'Apply team', exact: true }).click();
+  await page.getByRole('button', { name: '+ Activity', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Owner', exact: true }).selectOption({ label: 'Marco (50%)' });
+  await page.getByRole('button', { name: 'Keep durations', exact: true }).click();
+  await page.getByRole('spinbutton', { name: 'Effort (hours)', exact: true }).fill('40');
+  await page.getByRole('spinbutton', { name: 'Effort (hours)', exact: true }).press('Tab');
+  const proposal = page.getByRole('dialog', { name: 'Recalculate duration?' });
+  await expect(proposal).toContainText('10 d');
+  await page.getByRole('button', { name: 'Apply selected', exact: true }).click();
+  await expect(page.getByRole('spinbutton', { name: 'Duration', exact: true })).toHaveValue('10');
+  await page.getByRole('spinbutton', { name: 'Effort (hours)', exact: true }).fill('48');
+  await page.getByRole('spinbutton', { name: 'Effort (hours)', exact: true }).press('Tab');
+  await expect(proposal).toContainText('12 d');
+  await page.getByRole('button', { name: 'Keep durations', exact: true }).click();
+  await expect(page.getByRole('spinbutton', { name: 'Duration', exact: true })).toHaveValue('10');
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.locator('.react-flow__node').first().click();
+  await expect(page.getByRole('spinbutton', { name: 'Effort (hours)', exact: true })).toHaveValue('40');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByText('Project saved locally.', { exact: true })).toBeVisible();
+  await page.reload();
+  await page.getByRole('button', { name: 'Recent Projects', exact: true }).click();
+  await page.getByRole('button', { name: 'New Project', exact: false }).click();
+  await page.locator('.react-flow__node').first().click();
+  await expect(page.getByRole('combobox', { name: 'Owner', exact: true })).toHaveValue(/.+/);
+  await expect(page.getByRole('spinbutton', { name: 'Duration', exact: true })).toHaveValue('10');
+});
+
+test('TSV edits offer one selectable duration preview without overwriting an excluded duration', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open Demo Project', exact: true }).click();
+  await page.getByRole('button', { name: 'Paste TSV', exact: true }).click();
+  await page.getByRole('textbox', { name: 'TSV edits', exact: true }).fill('code\teffortHours\tduration\nMIG\t40\t7\nUAT\t32\t6');
+  await page.getByRole('button', { name: 'Apply edits', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Recalculate duration?' });
+  await expect(dialog).toContainText('MIG'); await expect(dialog).toContainText('UAT');
+  await dialog.getByRole('checkbox').first().uncheck();
+  await dialog.getByRole('button', { name: 'Apply selected' }).click();
+  await expect(page.locator('.react-flow__node[data-id="activity-2"]')).toContainText('7d');
+  await expect(page.locator('.react-flow__node[data-id="activity-5"]')).toContainText('4d');
+});

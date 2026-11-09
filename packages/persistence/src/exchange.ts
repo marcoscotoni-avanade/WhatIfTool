@@ -49,7 +49,7 @@ export function importCsv(m: ProjectModel, text: string, kind: 'activities' | 'd
       plannedFinish: r.plannedFinish || undefined, intrinsicRisk: r.intrinsicRisk ? Number(r.intrinsicRisk) : undefined,
       probabilityOfDelay: r.probabilityOfDelay ? Number(r.probabilityOfDelay) : undefined, delayP80: r.delayP80 ? Number(r.delayP80) : undefined,
       constraintType: (r.constraintType || undefined) as Activity['constraintType'], constraintDate: r.constraintDate || undefined,
-      actualStart: r.actualStart || undefined, actualFinish: r.actualFinish || undefined, calendarId: r.calendarId || undefined,
+      actualStart: r.actualStart || undefined, actualFinish: r.actualFinish || undefined, calendarId: r.calendarId || undefined, ownerId: r.ownerId || undefined,
       status: (r.status || 'NOT_STARTED') as Activity['status'], targetDate: r.targetDate || undefined,
       graphPosition: r.graphPosition ? JSON.parse(r.graphPosition) as Activity['graphPosition'] : { x: (i % 5) * 330, y: Math.floor(i / 5) * 240 },
     }));

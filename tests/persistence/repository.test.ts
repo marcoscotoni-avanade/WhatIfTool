@@ -34,3 +34,18 @@ it('round trips JSON and quoted multiline CSV and validates imports atomically',
   expect(() => importCsv(m, 'name,duration\nBad,-4', 'activities')).toThrow();
   expect(() => importJson(JSON.stringify({ ...m, activities: [{ ...m.activities[0]!, duration: -1 }] } satisfies Partial<ProjectModel>))).toThrow();
 });
+it('preserves team and owner in SQLite, JSON, CSV and baseline snapshots', async () => {
+  const map = new Map<string, Uint8Array>();
+  const storage: BinaryStore = { read: async id => map.get(id), write: async (id, bytes) => { map.set(id, bytes); },
+    remove: async id => { map.delete(id); }, keys: async () => [...map.keys()] };
+  const repo = await SqliteProjectRepository.create(storage, () => resolve('node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'));
+  const m = createDemo();
+  m.project.team = { name: 'Team', calendarId: 'standard', members: [{ id: 'm', name: 'Marco', allocationPercent: 50 }] };
+  m.activities[0]!.ownerId = 'm';
+  const withBaseline = createScenario(m, 'Scenario').model;
+  expect(importJson(exportJson(withBaseline))).toEqual(withBaseline);
+  expect(importCsv(m, toCsv(m.activities), 'activities').activities[0]!.ownerId).toBe('m');
+  await repo.saveProject(withBaseline);
+  expect(await repo.loadProject(m.project.id)).toEqual(JSON.parse(JSON.stringify(withBaseline)));
+  expect(repo.decode(repo.encode(createDemo())).project.team).toBeUndefined();
+});

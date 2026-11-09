@@ -1,5 +1,11 @@
 # Decision log
 
+## Explicit team duration proposals
+**Decision:** one optional project team, one optional activity owner, and opt-in duration conversion.
+**Reason:** effort, duration and availability are distinct inputs; user decisions remain reversible.
+**Consequences:** no resource levelling; team and owner are optional version-1 JSON payload fields,
+so existing files and baseline snapshots require no destructive migration.
+
 ## UTC working instants
 **Decision:** ISO UTC instants with configurable work intervals; date-only means 09:00 UTC.
 **Reason:** deterministic calculations across machines and DST boundaries.

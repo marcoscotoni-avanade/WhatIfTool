@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry, themeQuartz, type ColDef, type GridApi } from 'ag-grid-community';
 import type { Activity } from '@planner/domain';
-import { writeOverride } from '@planner/scenarios';
 import { useProjectStore } from '../store/useProjectStore';
 import { activityPatch, editableActivityFields } from '../store/editing';
 import { Modal, fullDate, num, useResolved } from '../components/shared';
@@ -24,6 +23,9 @@ export function ActivityGrid() {
     { field: 'code', width: 105, pinned: 'left' }, { field: 'name', headerName: 'Activity', width: 205, pinned: 'left' },
     { field: 'type', width: 115, cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['TASK', 'MILESTONE', 'SUMMARY'] } },
     { field: 'effortHours', headerName: 'Effort (h)', width: 105 }, { field: 'duration', width: 100 },
+    { field: 'ownerId', headerName: 'Owner', width: 150, cellEditor: 'agSelectCellEditor',
+      cellEditorParams: { values: ['', ...(m.project.team?.members ?? []).map(member => member.id)] },
+      valueFormatter: p => m.project.team?.members.find(member => member.id === p.value)?.name ?? 'No owner' },
     { field: 'durationUnit', headerName: 'Unit', width: 75, cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['d', 'h'] } },
     { field: 'scheduleMode', width: 125, cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['AUTO', 'MANUAL'] } },
     ...(['plannedStart', 'plannedFinish', 'calculatedStart', 'calculatedFinish'] as const).map(field => ({ field, width: 175,
@@ -34,7 +36,7 @@ export function ActivityGrid() {
     { field: 'totalSlack', headerName: 'Slack (d)', width: 100, editable: false, valueFormatter: p => num(p.value), cellClassRules: { negative: p => (p.value ?? 0) < 0 } },
     { field: 'risk', headerName: 'Risk', width: 85, editable: false, valueFormatter: p => num(p.value) },
     { field: 'status', width: 150, cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['NOT_STARTED', 'IN_PROGRESS', 'COMPLETE'] } },
-  ], [immutable]);
+  ], [immutable, m.project.team]);
   useEffect(() => {
     api.current?.forEachNode(n => {
       const selected = !!n.data && s.selectedActivityIds.includes(n.data.id);
@@ -56,16 +58,7 @@ export function ActivityGrid() {
     } catch (error) { s.report(error); }
   };
   const applyPatches = (patches: { id: string; patch: Partial<Activity> }[]) => {
-    return s.commit('Bulk edit activities', model => {
-      for (const { id, patch } of patches) {
-        if (s.activeScenarioId) {
-          for (const [field, value] of Object.entries(patch)) {
-            writeOverride(model, s.activeScenarioId, 'activity', id, field, value);
-          }
-        } else Object.assign(model.activities.find(a => a.id === id)!, patch);
-      }
-      return model;
-    });
+    return s.updateActivityPatches(patches);
   };
   const applyPaste = () => {
     try {

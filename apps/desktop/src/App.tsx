@@ -10,10 +10,11 @@ import { Explorer } from './components/Explorer';
 import { Comparison } from './scenarios/Comparison';
 import { DependencyDialog, ExchangeDialog, NameDialog, ProjectSettingsDialog, RecentDialog } from './components/Dialogs';
 import { Modal, displayDate, num, useResolved } from './components/shared';
+import { DurationProposalDialog, TeamDialog } from './components/TeamDialogs';
 import { openNativeProject, repository, saveProject } from './persistence/local';
 import './styles/app.css';
 
-type Dialog = 'new' | 'scenario' | 'clone' | 'rename' | 'baseline' | 'dependency' | 'exchange' | 'settings' | 'recent' | 'compare';
+type Dialog = 'new' | 'scenario' | 'clone' | 'rename' | 'baseline' | 'dependency' | 'exchange' | 'settings' | 'recent' | 'compare' | 'team';
 export default function App() {
   const s = useProjectStore(), m = useResolved(), [dialog, setDialog] = useState<Dialog>(), [welcome, setWelcome] = useState(true);
   const [pendingAction, setPendingAction] = useState<(() => void) | undefined>(), [saving, setSaving] = useState(false);
@@ -96,7 +97,7 @@ export default function App() {
     <nav className="toolbar" aria-label="Planning toolbar">
       <div><button disabled={immutable} onClick={() => s.addActivity()}>+ Activity</button><button disabled={immutable} onClick={() => s.addActivity(true)}>+ Milestone</button>
         <button disabled={immutable || m.activities.length < 2} onClick={() => setDialog('dependency')}>Add Dependency</button>
-        <button disabled={immutable || !s.selectedActivityIds.length} onClick={s.duplicateSelection}>Duplicate</button>
+        <button disabled={immutable} onClick={() => setDialog('team')}>Team</button><button disabled={immutable || !s.selectedActivityIds.length} onClick={s.duplicateSelection}>Duplicate</button>
         <button disabled={immutable || (!s.selectedActivityIds.length && !s.selectedDependencyId)} onClick={s.deleteSelection}>Delete</button></div>
       <div><button disabled={!s.history.length} title="Ctrl+Z" onClick={s.undo}>Undo</button><button disabled={!s.future.length} title="Ctrl+Y" onClick={s.redo}>Redo</button></div>
       <div className="scenario-tools"><select aria-label="Active scenario" value={s.activeScenarioId ?? ''} onChange={e => s.activateScenario(e.target.value || undefined)}>
@@ -142,6 +143,8 @@ export default function App() {
     {dialog === 'dependency' && <DependencyDialog close={close} />}{dialog === 'settings' && <ProjectSettingsDialog close={close} />}
     {dialog === 'recent' && <RecentDialog close={close} />}{dialog === 'exchange' && <ExchangeDialog close={close} />}
     {dialog === 'compare' && <Comparison close={close} />}
+    {dialog === 'team' && <TeamDialog close={close} />}
+    {s.pendingEdit && <DurationProposalDialog />}
     {pendingAction && <Modal title="Unsaved changes" close={() => setPendingAction(undefined)}>
       <p>Save your changes before leaving this project?</p><div className="dialog-actions">
         <button className="primary" onClick={() => {

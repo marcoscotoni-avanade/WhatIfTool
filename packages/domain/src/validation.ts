@@ -28,6 +28,15 @@ export function validateProject(m: ProjectSnapshot): void {
   unique(m.calendars.map(c => c.id), 'calendar');
   const calendars = new Set(m.calendars.map(c => c.id));
   if (!calendars.has(m.project.defaultCalendarId)) fail('Default calendar is missing.');
+  const team = m.project.team;
+  if (team !== undefined) {
+    if (!team || typeof team.name !== 'string' || !team.name.trim() || !calendars.has(team.calendarId) || !Array.isArray(team.members))
+      fail('Invalid team or team calendar.');
+    unique(team.members.map(member => member.id), 'team member');
+    for (const member of team.members)
+      if (typeof member.name !== 'string' || !member.name.trim() || !finite(member.allocationPercent, 0, 100))
+        fail('Team members require a name and allocation between 0 and 100%.');
+  }
   for (const c of m.calendars) {
     if (!c.workingDays?.length || c.workingDays.some(d => !Number.isInteger(d) || d < 0 || d > 6)
       || !c.workingIntervals?.length || !intervalsValid(c.workingIntervals)) fail(`Invalid working calendar ${c.name}.`);
@@ -44,6 +53,8 @@ export function validateProject(m: ProjectSnapshot): void {
     if (!finite(a.duration, 0) || !finite(a.effortHours, 0)) fail(`Duration and effort must be non-negative: ${a.code}.`);
     if (a.type === 'MILESTONE' && a.duration !== 0) fail(`Milestone ${a.code} must have zero duration.`);
     if (a.calendarId && !calendars.has(a.calendarId)) fail(`Missing calendar: ${a.code}.`);
+    if (a.ownerId !== undefined && (typeof a.ownerId !== 'string' || !a.ownerId.trim() || !team?.members.some(member => member.id === a.ownerId)))
+      fail(`Missing team owner: ${a.code}.`);
     if (!a.graphPosition || !finite(a.graphPosition.x, -Infinity) || !finite(a.graphPosition.y, -Infinity)) fail(`Invalid graph position: ${a.code}.`);
     for (const key of ['plannedStart', 'plannedFinish', 'actualStart', 'actualFinish', 'constraintDate', 'targetDate'] as const)
       if (a[key] && !date(a[key])) fail(`Invalid ${key}: ${a.code}.`);

@@ -9,6 +9,15 @@ Finish-based dependencies may retain an opening-time finish after a nonworking g
 Friday 09:00 to Monday 09:00 still contains one working day. This preserves FF/SF
 wall-clock bounds without adding work or shifting pinned/manual dates.
 
+## Optional effort-to-duration proposal
+
+For a working activity, elapsed working hours are `effortHours / (allocationPercent / 100)`;
+days divide those hours by the selected calendar's nominal day hours. The team calendar applies
+when there is an owner; otherwise the project default and 100% allocation apply. The proposed
+duration and calendar become scheduling inputs only when explicitly accepted. A zero allocation,
+milestone or elapsed activity cannot be converted. Working calendars retain their historical
+contents for activities excluded from a calendar-change proposal; no resource levelling occurs.
+
 ## Forward pass
 
 Each automatic start is the maximum of project start, optional planned start and predecessor bounds:

@@ -5,9 +5,9 @@ import { calculateProjectRisk } from '@planner/risk';
 const fields: Record<EntityType, ReadonlySet<string>> = {
   activity: new Set(['code', 'name', 'description', 'type', 'effortHours', 'duration', 'durationUnit', 'elapsedMode', 'scheduleMode',
     'plannedStart', 'plannedFinish', 'actualStart', 'actualFinish', 'constraintType', 'constraintDate', 'targetDate',
-    'intrinsicRisk', 'probabilityOfDelay', 'delayP80', 'calendarId', 'status', 'graphPosition']),
+    'intrinsicRisk', 'probabilityOfDelay', 'delayP80', 'calendarId', 'ownerId', 'status', 'graphPosition']),
   dependency: new Set(['predecessorId', 'successorId', 'type', 'lag', 'lagUnit', 'edgeWeight']),
-  project: new Set(['name', 'description', 'projectStart', 'targetFinish', 'defaultCalendarId']),
+  project: new Set(['name', 'description', 'projectStart', 'targetFinish', 'defaultCalendarId', 'team']),
   settings: new Set(['riskThreshold', 'defaultDamping', 'transmissionCap', 'defaultImpactHorizon', 'riskColorThresholds']),
   calendar: new Set(['name', 'workingDays', 'workingIntervals', 'holidays', 'exceptions']),
 };

@@ -2,6 +2,9 @@ import { create } from 'zustand';
 import { createActivity, createProject, validateProject, type Activity, type CalculationResults, type Dependency, type EntityType, type ProjectModel, type ScenarioComparison } from '@planner/domain';
 import { createScenario, deleteScenario, publishBaseline, resolveScenario, validateDocument, writeOverride } from '@planner/scenarios';
 import { command, normalize, toModel, type DocumentCommand, type DocumentState } from './document';
+import { proposeDuration, type DurationProposal } from './durationProposal';
+
+interface PendingEdit { name: string; model: ProjectModel; revision: number; scenarioId?: string; proposals: DurationProposal[] }
 
 interface Store {
   document: DocumentState; revision: number; dirty: boolean; path?: string; activeScenarioId?: string;
@@ -9,7 +12,11 @@ interface Store {
   riskFlow: boolean; viewMode: 'split' | 'graph' | 'grid'; calculationStatus: 'idle' | 'calculating' | 'ready' | 'error';
   results?: CalculationResults; comparison?: ScenarioComparison; error?: string; notice?: string;
   history: DocumentCommand[]; future: DocumentCommand[];
+  pendingEdit?: PendingEdit;
   commit(name: string, mutate: (m: ProjectModel) => ProjectModel, scenarioId?: string): boolean;
+  requestEdit(name: string, mutate: (m: ProjectModel) => ProjectModel): boolean;
+  finishEdit(selectedIds?: string[]): void;
+  updateActivityPatches(patches: { id: string; patch: Partial<Activity> }[]): boolean;
   load(m: ProjectModel, path?: string): void; saveCompleted(revision: number, path?: string): void;
   updateEntity(type: EntityType, id: string, patch: Record<string, unknown>): void;
   updateActivities(ids: string[], patch: Partial<Activity>): void;
@@ -25,6 +32,76 @@ export const useProjectStore = create<Store>((set, get) => ({
   document: normalize(createProject()), revision: 0, dirty: false, selectedActivityIds: [], riskFlow: false,
   viewMode: 'split', calculationStatus: 'idle', history: [], future: [],
   report: error => { console.error('[planner]', { message: message(error), at: new Date().toISOString() }); set({ error: message(error) }); },
+  requestEdit: (name, mutate) => {
+    try {
+      const state = get();
+      if (state.pendingEdit) throw new Error('Complete or cancel the pending duration proposal first.');
+      const original = toModel(state.document), before = resolveScenario(original, state.activeScenarioId);
+      const model = mutate(structuredClone(original));
+      validateDocument(model);
+      const after = resolveScenario(model, state.activeScenarioId);
+      const changedCalendars = before.calendars.filter(c => {
+        const updated = after.calendars.find(x => x.id === c.id);
+        return updated && JSON.stringify(c) !== JSON.stringify(updated);
+      });
+      const basis = (activity: Activity, snapshot: typeof before) => {
+        const owner = snapshot.project.team?.members.find(m => m.id === activity.ownerId);
+        const calendarId = owner ? snapshot.project.team!.calendarId : snapshot.project.defaultCalendarId;
+        return JSON.stringify([owner?.allocationPercent ?? 100, snapshot.calendars.find(c => c.id === calendarId)]);
+      };
+      const proposals = after.activities.flatMap(activity => {
+        const previous = before.activities.find(a => a.id === activity.id);
+        const previousCalendar = previous?.calendarId ?? before.project.defaultCalendarId;
+        const calendarChanged = changedCalendars.some(c => c.id === previousCalendar)
+          || (!previous?.calendarId && before.project.defaultCalendarId !== after.project.defaultCalendarId);
+        if (!previous || (previous.effortHours === activity.effortHours && previous.ownerId === activity.ownerId
+          && !calendarChanged && basis(previous, before) === basis(activity, after))) return [];
+        return [proposeDuration(after, activity)];
+      });
+      if (before.project.defaultCalendarId !== after.project.defaultCalendarId) {
+        for (const activity of before.activities.filter(a => !a.calendarId)) {
+          if (state.activeScenarioId) writeOverride(model, state.activeScenarioId, 'activity', activity.id, 'calendarId', before.project.defaultCalendarId);
+          else model.activities.find(a => a.id === activity.id)!.calendarId = before.project.defaultCalendarId;
+        }
+      }
+      for (const oldCalendar of changedCalendars) {
+        const frozen = { ...structuredClone(oldCalendar), id: crypto.randomUUID(), name: `${oldCalendar.name} (previous)` };
+        const affected = before.activities.filter(a => (a.calendarId ?? before.project.defaultCalendarId) === oldCalendar.id);
+        if (!affected.length) continue;
+        if (state.activeScenarioId) writeOverride(model, state.activeScenarioId, 'calendar', frozen.id, '$entity', frozen);
+        else model.calendars.push(frozen);
+        for (const activity of affected) {
+          if (state.activeScenarioId) writeOverride(model, state.activeScenarioId, 'activity', activity.id, 'calendarId', frozen.id);
+          else model.activities.find(a => a.id === activity.id)!.calendarId = frozen.id;
+        }
+      }
+      validateDocument(model);
+      if (!proposals.length) return get().commit(name, () => model);
+      set({ pendingEdit: { name, model, revision: state.revision, scenarioId: state.activeScenarioId, proposals }, error: undefined });
+      return true;
+    } catch (error) { get().report(error); return false; }
+  },
+  finishEdit: selectedIds => {
+    const state = get(), pending = state.pendingEdit;
+    if (!pending) return;
+    if (!selectedIds) { set({ pendingEdit: undefined }); return; }
+    if (pending.revision !== state.revision || pending.scenarioId !== state.activeScenarioId) {
+      set({ pendingEdit: undefined }); get().report('The project changed while the proposal was open. Please retry.'); return;
+    }
+    const selected = new Set(selectedIds);
+    const model = structuredClone(pending.model);
+    for (const proposal of pending.proposals) {
+      if (!selected.has(proposal.activityId) || proposal.duration === undefined || !proposal.calendarId) continue;
+      if (pending.scenarioId) {
+        writeOverride(model, pending.scenarioId, 'activity', proposal.activityId, 'duration', proposal.duration);
+        writeOverride(model, pending.scenarioId, 'activity', proposal.activityId, 'calendarId', proposal.calendarId);
+      } else {
+        const activity = model.activities.find(a => a.id === proposal.activityId)!;
+        activity.duration = proposal.duration; activity.calendarId = proposal.calendarId;
+      }
+    }
+    if (get().commit(pending.name, () => model, pending.scenarioId)) set({ pendingEdit: undefined });
+  },
   commit: (name, mutate, scenarioId = get().activeScenarioId) => {
     try {
       const state = get(), m = mutate(structuredClone(toModel(state.document)));
@@ -41,12 +118,13 @@ export const useProjectStore = create<Store>((set, get) => ({
       validateDocument(m);
       set(s => ({ document: normalize(m), revision: s.revision + 1, dirty: false, path, activeScenarioId: undefined,
         selectedActivityIds: [], selectedDependencyId: undefined, activeMilestoneId: undefined, history: [], future: [],
-        results: undefined, comparison: undefined, error: undefined, calculationStatus: 'calculating' }));
+        pendingEdit: undefined, results: undefined, comparison: undefined, error: undefined, calculationStatus: 'calculating' }));
     } catch (error) { get().report(error); }
   },
   saveCompleted: (revision, path) => set(s => ({ dirty: s.revision !== revision, path: path ?? s.path, notice: 'Project saved locally.' })),
   updateEntity: (type, id, patch) => {
-    get().commit(`Update ${type}`, m => {
+    const apply = type === 'calendar' || (type === 'project' && ('team' in patch || 'defaultCalendarId' in patch)) ? get().requestEdit : get().commit;
+    apply(`Update ${type}`, m => {
       if (get().activeScenarioId) {
         for (const [field, value] of Object.entries(patch)) writeOverride(m, get().activeScenarioId!, type, id, field, value);
       } else {
@@ -62,8 +140,11 @@ export const useProjectStore = create<Store>((set, get) => ({
     });
   },
   updateActivities: (ids, patch) => {
-    get().commit('Edit activities', m => {
-      for (const id of ids) {
+    get().updateActivityPatches(ids.map(id => ({ id, patch })));
+  },
+  updateActivityPatches: patches => {
+    return get().requestEdit('Edit activities', m => {
+      for (const { id, patch } of patches) {
         if (get().activeScenarioId) {
           for (const [field, value] of Object.entries(patch)) writeOverride(m, get().activeScenarioId!, 'activity', id, field, value);
         } else {

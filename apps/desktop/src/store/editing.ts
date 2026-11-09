@@ -2,7 +2,7 @@ import { iso, type Activity } from '@planner/domain';
 export const editableActivityFields = new Set([
   'code', 'name', 'description', 'type', 'effortHours', 'duration', 'durationUnit', 'elapsedMode', 'scheduleMode',
   'plannedStart', 'plannedFinish', 'actualStart', 'actualFinish', 'constraintType', 'constraintDate', 'targetDate',
-  'intrinsicRisk', 'probabilityOfDelay', 'delayP80', 'calendarId', 'status',
+  'intrinsicRisk', 'probabilityOfDelay', 'delayP80', 'calendarId', 'ownerId', 'status',
 ]);
 const numeric = new Set(['duration', 'effortHours', 'intrinsicRisk', 'probabilityOfDelay', 'delayP80']);
 const dates = new Set(['plannedStart', 'plannedFinish', 'actualStart', 'actualFinish', 'constraintDate', 'targetDate']);
@@ -16,7 +16,7 @@ export function activityPatch(field: string, value: unknown, activity: Activity,
     if (![true, false, 'true', 'false'].includes(value as string | boolean)) throw new Error('Elapsed mode must be true or false.');
     parsed = value === true || value === 'true';
   }
-  if (['constraintType', 'calendarId'].includes(field) && !text) parsed = undefined;
+  if (['constraintType', 'calendarId', 'ownerId'].includes(field) && !text) parsed = undefined;
   const patch: Partial<Activity> = {};
   Reflect.set(patch, field, parsed);
   if (field === 'type' && value === 'MILESTONE') patch.duration = 0;

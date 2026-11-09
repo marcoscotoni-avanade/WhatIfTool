@@ -71,6 +71,7 @@ export function ProjectSettingsDialog({ close }: { close: () => void }) {
           if (typeof value !== 'object' || value === null || Reflect.get(value, 'id') !== m.calendars[0]!.id) throw new Error('Calendar ID cannot change.');
           const { id: _id, ...patch } = value as Record<string, unknown>;
           s.updateEntity('calendar', m.calendars[0]!.id, patch);
+          if (useProjectStore.getState().pendingEdit) close();
         } catch (error) { s.report(error); }
       }}>Apply validated calendar</button>
     </div></div>
@@ -113,7 +114,7 @@ export function ExchangeDialog({ close }: { close: () => void }) {
   return <Modal title="Import / Export" close={close}>
     <Field label="Data format" value={kind} options={[{ value: 'json', label: 'JSON - complete project' }, { value: 'activities', label: 'CSV - activities' },
       { value: 'dependencies', label: 'CSV - dependencies' }, { value: 'results', label: 'CSV - scenario results (export only)' }]} onCommit={setKind} />
-    <p>JSON includes baseline history, scenario overrides and settings. CSV imports replace the selected draft collection after validation; IDs must match dependency endpoints.</p>
+    <p>JSON includes baseline history, scenario overrides and settings. CSV imports replace the selected draft collection after validation; IDs must match dependency endpoints. CSV durations are imported as provided and are not recalculated automatically.</p>
     <button className="primary" onClick={() => void exportFile().catch(s.report)}>Export selected format</button><hr />
     <label className="field"><span>Import file (.json, .csv or .pgplan)</span><input aria-label="Import file" type="file" accept=".json,.csv,.pgplan" onChange={e => {
       const file = e.target.files?.[0]; if (!file) return;

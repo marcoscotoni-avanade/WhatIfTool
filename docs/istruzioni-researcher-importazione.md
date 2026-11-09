@@ -86,6 +86,7 @@ baseline e scenari si potranno creare nel tool dopo la revisione.
 | `projectStart` | data ISO UTC | Data e ora di inizio del progetto. Obbligatoria. |
 | `targetFinish` | data ISO UTC | Facoltativa: scadenza complessiva, se documentata. |
 | `defaultCalendarId` | stringa | Deve corrispondere all'`id` di un calendario in `calendars`. |
+| `team` | oggetto | Facoltativo: `{"name":"Team","calendarId":"standard","members":[{"id":"marco","name":"Marco","allocationPercent":50}]}`. Il calendario deve esistere; ID persone unici, allocazione da 0 a 100. Non inventare persone o allocazioni. |
 | `createdAt`, `modifiedAt` | data ISO UTC | Metadati obbligatori; usa la data e ora effettiva di generazione, senza inventare date storiche. |
 
 #### Attività: ogni elemento di `activities`
@@ -111,6 +112,7 @@ baseline e scenari si potranno creare nel tool dopo la revisione.
 | `probabilityOfDelay` | numero | Facoltativo: probabilità di ritardo da 0 a 1; ad esempio 60% = `0.6`, non `60`. |
 | `delayP80` | numero | Facoltativo: ritardo credibile/P80 in giorni lavorativi nominali, non negativo. |
 | `calendarId` | stringa | Facoltativo: se presente, deve riferirsi a un calendario esistente. Se assente, usa quello predefinito del progetto. |
+| `ownerId` | stringa | Facoltativo: deve coincidere con l'`id` di una persona in `project.team.members`. Non inventare assegnazioni. |
 | `status` | stringa | Facoltativo: `NOT_STARTED`, `IN_PROGRESS` oppure `COMPLETE`. |
 | `graphPosition` | oggetto | Obbligatorio: `{"x": 0, "y": 0}`, con numeri finiti. Per renderlo leggibile usa posizioni distinte, per esempio `x` crescente di 340 lungo le dipendenze e `y` crescente di 220 per rami paralleli. Le posizioni sono solo layout e non implicano dipendenze. |
 

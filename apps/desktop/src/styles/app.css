@@ -555,6 +555,12 @@ b,strong {
   grid-template-columns:1fr 1fr;
   gap:10px
 }
+.team-member {
+  display:grid;
+  grid-template-columns:minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items:center;
+  gap:10px
+}
 .check {
   display:flex;
   gap:6px;

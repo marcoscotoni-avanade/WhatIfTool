@@ -31,6 +31,7 @@ export function PropertyPanel() {
       {input('Activity type', 'type', 'text', ['TASK', 'MILESTONE', 'SUMMARY'])}
       {input('Status', 'status', 'text', ['NOT_STARTED', 'IN_PROGRESS', 'COMPLETE'])}</details>
     <details open><summary>Scheduling <small>UTC</small></summary><div className="field-pair">{input('Effort (hours)', 'effortHours', 'number')}{input('Duration', 'duration', 'number')}</div>
+      <Field label="Owner" value={a.ownerId ?? ''} options={[{ value: '', label: 'No owner (project calendar, 100%)' }, ...(m.project.team?.members ?? []).map(member => ({ value: member.id, label: `${member.name} (${member.allocationPercent}%)` }))]} disabled={immutable} onCommit={value => update('ownerId', value)} />
       <div className="field-pair">{input('Duration unit', 'durationUnit', 'text', ['d', 'h'])}{input('Schedule mode', 'scheduleMode', 'text', ['AUTO', 'MANUAL'])}</div>
       <Field label="Calendar" value={a.calendarId ?? m.project.defaultCalendarId} options={m.calendars.map(c => ({ value: c.id, label: c.name }))} disabled={immutable} onCommit={value => update('calendarId', value)} />
       <label className="check"><input type="checkbox" checked={a.elapsedMode} disabled={immutable} onChange={e => update('elapsedMode', String(e.target.checked))} />Elapsed (24-hour) duration</label>

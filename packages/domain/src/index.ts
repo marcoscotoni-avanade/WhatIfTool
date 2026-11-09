@@ -3,8 +3,10 @@ export type DependencyType = 'FS' | 'SS' | 'FF' | 'SF';
 export type ConstraintType = 'ASAP' | 'START_NO_EARLIER_THAN' | 'FINISH_NO_LATER_THAN' | 'MUST_START_ON' | 'MUST_FINISH_ON';
 export interface Project {
   id: string; name: string; description?: string; projectStart: string; targetFinish?: string;
-  defaultCalendarId: string; createdAt: string; modifiedAt: string;
+  defaultCalendarId: string; createdAt: string; modifiedAt: string; team?: Team;
 }
+export interface TeamMember { id: string; name: string; allocationPercent: number }
+export interface Team { name: string; calendarId: string; members: TeamMember[] }
 export interface Activity {
   id: string; projectId: string; code: string; name: string; description?: string;
   type: 'TASK' | 'MILESTONE' | 'SUMMARY';
@@ -12,7 +14,7 @@ export interface Activity {
   scheduleMode: 'AUTO' | 'MANUAL';
   plannedStart?: string; plannedFinish?: string; actualStart?: string; actualFinish?: string;
   constraintType?: ConstraintType; constraintDate?: string; targetDate?: string;
-  intrinsicRisk?: number; probabilityOfDelay?: number; delayP80?: number; calendarId?: string;
+  intrinsicRisk?: number; probabilityOfDelay?: number; delayP80?: number; calendarId?: string; ownerId?: string;
   status?: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETE'; graphPosition: { x: number; y: number };
 }
 export interface Dependency {

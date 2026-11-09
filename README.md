@@ -99,6 +99,8 @@ ELK and AG Grid are sizeable local vendor chunks; no CDN is used.
 - Synchronized graph/grid selection and one normalized Zustand canonical document.
 - Inspector: scheduling inputs, calendars, manual/actual dates, constraints, risk factors,
   edge-level explanations and explicit scenario overrides.
+- One project team with a working calendar, people and 0–100% allocation; an optional owner
+  per activity. Changing effort, owner or availability offers an explicit duration preview.
 - Calendar-aware FS, SS, FF and SF, positive/negative lag, forward/backward passes,
   critical and negative slack, visible manual/constraint conflicts.
 - Worker-only scheduling/risk/contributor/comparison calculations with stale-result rejection.
@@ -109,6 +111,24 @@ ELK and AG Grid are sizeable local vendor chunks; no CDN is used.
 - Local `.pgplan` SQLite files, new/open/save/save-as, recent projects, JSON/CSV exchange.
 - Reversible document commands, keyboard undo/redo, validation before mutation, unsaved-change
   guards and visible errors. Ctrl+S saves, Ctrl+Shift+S saves as, Ctrl+O opens, Ctrl+Z/Y undo/redo.
+
+### Team and duration
+
+Use **Team** to define a project team, choose its working calendar and add people with an allocation
+percentage. Select an activity and choose its **Owner** in the inspector or grid. Without an owner,
+the project calendar and 100% allocation are used for duration proposals.
+
+When effort, owner, allocation or the relevant calendar changes, review the proposal and select
+which activities to recalculate. **Keep durations** saves the edit without changing duration or the
+activity's previous calendar; **Cancel entire edit** cancels the edit as well. For example, 40 hours
+at 50% on an eight-hour calendar yields 10 working days. The calendar accounts for weekends,
+holidays and exceptions. Zero allocation cannot produce a proposal; milestones remain at zero
+and elapsed activities retain their manually entered durations. Activities are not resource-levelled against
+one another. In scenarios the team is isolated from the baseline. CSV replacement imports retain
+the durations in the file and do not trigger a proposal.
+
+Changing duration directly recalculates calculated dates, not planned dates. Manual schedules,
+actual dates and hard constraints can pin dates and produce visible conflicts.
 
 ### Files and recovery
 
@@ -159,8 +179,8 @@ docs/
 ## Engines and domain
 
 The canonical model holds project metadata, activities, dependency edges, calendars, risk settings,
-scenarios, field overrides and immutable baseline snapshots. Effort is informational and does not
-determine duration. Milestones have zero duration. Calculated dates are separate engine outputs.
+scenarios, field overrides and immutable baseline snapshots. Effort and duration remain independent
+unless the user accepts a duration proposal. Milestones have zero duration. Calculated dates are separate engine outputs.
 All instants and calendar intervals use **UTC**.
 
 The scheduler validates a DAG, computes predecessor bounds in topological order, then propagates
