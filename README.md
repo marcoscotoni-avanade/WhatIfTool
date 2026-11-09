@@ -185,6 +185,8 @@ tombstone overrides. Historical baselines are never overwritten by promotion.
 See [architecture](docs/architecture.md), [domain model](docs/domain-model.md),
 [scheduling](docs/scheduling-engine.md), [risk model](docs/risk-model.md) and
 [decisions](docs/decisions.md) for formulas, invariants and assumptions.
+For an external AI assistant, see the Italian [Researcher import instructions](docs/istruzioni-researcher-importazione.md)
+to generate a compatible JSON project for manual review and import.
 
 ## Known MVP limitations
 
