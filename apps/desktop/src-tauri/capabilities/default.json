@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Local project file dialogs and reads; no network access",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:window:allow-destroy", "dialog:allow-open", "dialog:allow-save", "fs:allow-read-file"]
+}

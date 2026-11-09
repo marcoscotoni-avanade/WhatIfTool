@@ -1,0 +1,113 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AgGridReact } from 'ag-grid-react';
+import { AllCommunityModule, ModuleRegistry, themeQuartz, type ColDef, type GridApi } from 'ag-grid-community';
+import type { Activity } from '@planner/domain';
+import { writeOverride } from '@planner/scenarios';
+import { useProjectStore } from '../store/useProjectStore';
+import { activityPatch, editableActivityFields } from '../store/editing';
+import { Modal, fullDate, num, useResolved } from '../components/shared';
+
+ModuleRegistry.registerModules([AllCommunityModule]);
+type Row = Activity & { calculatedStart?: string; calculatedFinish?: string; totalSlack?: number; risk?: number; predecessors: string };
+const theme = themeQuartz.withParams({ fontSize: 12, headerHeight: 34, rowHeight: 32, accentColor: '#217f93', borderColor: '#dce4eb', backgroundColor: '#ffffff', foregroundColor: '#243c4f' });
+export function ActivityGrid() {
+  const s = useProjectStore(), m = useResolved(), api = useRef<GridApi<Row> | null>(null);
+  const [pasteOpen, setPasteOpen] = useState(false), [paste, setPaste] = useState('');
+  const [bulkField, setBulkField] = useState('duration'), [bulkValue, setBulkValue] = useState('');
+  const immutable = !!s.activeScenarioId && !!s.document.scenariosById[s.activeScenarioId]?.isBaseline;
+  const rows: Row[] = useMemo(() => m.activities.map(a => ({
+    ...a, calculatedStart: s.results?.schedule.activities[a.id]?.calculatedStart, calculatedFinish: s.results?.schedule.activities[a.id]?.calculatedFinish,
+    totalSlack: s.results?.schedule.activities[a.id]?.totalSlack, risk: s.results?.risk[a.id]?.totalRisk,
+    predecessors: m.dependencies.filter(d => d.successorId === a.id).map(d => `${m.activities.find(p => p.id === d.predecessorId)?.code} ${d.type}${d.lag ? `${d.lag > 0 ? '+' : ''}${d.lag}${d.lagUnit}` : ''}`).join(', '),
+  })), [m, s.results]);
+  const columns = useMemo<ColDef<Row>[]>(() => [
+    { field: 'code', width: 105, pinned: 'left' }, { field: 'name', headerName: 'Activity', width: 205, pinned: 'left' },
+    { field: 'type', width: 115, cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['TASK', 'MILESTONE', 'SUMMARY'] } },
+    { field: 'effortHours', headerName: 'Effort (h)', width: 105 }, { field: 'duration', width: 100 },
+    { field: 'durationUnit', headerName: 'Unit', width: 75, cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['d', 'h'] } },
+    { field: 'scheduleMode', width: 125, cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['AUTO', 'MANUAL'] } },
+    ...(['plannedStart', 'plannedFinish', 'calculatedStart', 'calculatedFinish'] as const).map(field => ({ field, width: 175,
+      editable: !immutable && !field.startsWith('calculated'), valueFormatter: (p: { value?: string }) => fullDate(p.value) })),
+    { field: 'predecessors', width: 180, editable: false },
+    { field: 'constraintType', headerName: 'Constraint', width: 195, cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['ASAP', 'START_NO_EARLIER_THAN', 'FINISH_NO_LATER_THAN', 'MUST_START_ON', 'MUST_FINISH_ON'] } },
+    { field: 'constraintDate', width: 175, valueFormatter: p => fullDate(p.value) },
+    { field: 'totalSlack', headerName: 'Slack (d)', width: 100, editable: false, valueFormatter: p => num(p.value), cellClassRules: { negative: p => (p.value ?? 0) < 0 } },
+    { field: 'risk', headerName: 'Risk', width: 85, editable: false, valueFormatter: p => num(p.value) },
+    { field: 'status', width: 150, cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['NOT_STARTED', 'IN_PROGRESS', 'COMPLETE'] } },
+  ], [immutable]);
+  useEffect(() => {
+    api.current?.forEachNode(n => {
+      const selected = !!n.data && s.selectedActivityIds.includes(n.data.id);
+      if (n.isSelected() !== selected) n.setSelected(selected, false, 'api');
+    });
+  }, [s.selectedActivityIds, rows]);
+  const selectedRows = () => rows.filter(r => s.selectedActivityIds.includes(r.id));
+  const copy = async () => {
+    try {
+      const fields = ['code', 'name', 'duration', 'effortHours', 'plannedStart', 'plannedFinish'];
+      await navigator.clipboard.writeText([fields.join('\t'), ...selectedRows().map(r => fields.map(f => String(Reflect.get(r, f) ?? '')).join('\t'))].join('\n'));
+      useProjectStore.setState({ notice: 'Selected rows copied as tab-separated values.' });
+    } catch (error) { s.report(error); }
+  };
+  const applyBulk = () => {
+    try {
+      const patches = selectedRows().map(a => ({ id: a.id, patch: activityPatch(bulkField, bulkValue, a, s.results?.schedule.activities[a.id]?.calculatedStart ?? m.project.projectStart) }));
+      applyPatches(patches);
+    } catch (error) { s.report(error); }
+  };
+  const applyPatches = (patches: { id: string; patch: Partial<Activity> }[]) => {
+    return s.commit('Bulk edit activities', model => {
+      for (const { id, patch } of patches) {
+        if (s.activeScenarioId) {
+          for (const [field, value] of Object.entries(patch)) {
+            writeOverride(model, s.activeScenarioId, 'activity', id, field, value);
+          }
+        } else Object.assign(model.activities.find(a => a.id === id)!, patch);
+      }
+      return model;
+    });
+  };
+  const applyPaste = () => {
+    try {
+      const lines = paste.replaceAll('\r', '').trim().split('\n').map(l => l.split('\t')), headers = lines.shift()!;
+      if (!headers.includes('code') || headers.some(h => !editableActivityFields.has(h))) throw new Error('TSV requires code and editable activity field headers.');
+      const patches = lines.map(cells => {
+        if (cells.length !== headers.length) throw new Error('TSV row length does not match headers.');
+        const code = cells[headers.indexOf('code')], a = m.activities.find(a => a.code === code);
+        if (!a) throw new Error(`Activity code not found: ${code}`);
+        const patch: Partial<Activity> = {};
+        headers.forEach((f, i) => { if (f !== 'code') Object.assign(patch, activityPatch(f, cells[i], a, m.project.projectStart)); });
+        return { id: a.id, patch };
+      });
+      if (applyPatches(patches)) setPasteOpen(false);
+    } catch (error) { s.report(error); }
+  };
+  return <section className="grid-panel" aria-label="Activity grid"><div className="panel-title"><span>ACTIVITIES <small>{rows.length} rows · double-click to edit</small></span><div>
+    <button disabled={immutable} onClick={() => s.addActivity()}>+ Add row</button><button disabled={!s.selectedActivityIds.length} onClick={() => void copy()}>Copy selected</button>
+    <button disabled={immutable} onClick={() => setPasteOpen(true)}>Paste TSV</button></div></div>
+    {s.selectedActivityIds.length > 1 && <div className="bulk-edit"><span>{s.selectedActivityIds.length} selected</span><select aria-label="Bulk field" value={bulkField} onChange={e => setBulkField(e.target.value)}>
+      {['duration', 'effortHours', 'intrinsicRisk', 'probabilityOfDelay', 'delayP80', 'plannedStart', 'plannedFinish', 'status'].map(f => <option key={f}>{f}</option>)}</select>
+      <input aria-label="Bulk value" value={bulkValue} onChange={e => setBulkValue(e.target.value)} /><button disabled={immutable} onClick={applyBulk}>Apply to selected</button></div>}
+    <div className="ag-container"><AgGridReact<Row> theme={theme} rowData={rows} columnDefs={columns}
+      defaultColDef={{ editable: !immutable, sortable: true, filter: true, resizable: true }}
+      getRowId={p => p.data.id} rowSelection={{ mode: 'multiRow', checkboxes: true, headerCheckbox: true, enableClickSelection: true }}
+      readOnlyEdit onGridReady={e => { api.current = e.api; }}
+      onRowDataUpdated={e => e.api.forEachNode(n => n.setSelected(!!n.data && s.selectedActivityIds.includes(n.data.id), false, 'api'))}
+      onSelectionChanged={e => {
+        if (e.source === 'api' || e.source === 'rowDataChanged') return;
+        s.select(e.api.getSelectedRows().map(r => r.id));
+      }}
+      onCellEditRequest={e => {
+        try {
+          const field = e.colDef.field;
+          if (field && e.data) s.updateActivities([e.data.id], activityPatch(field, e.newValue, e.data, e.data.calculatedStart ?? m.project.projectStart));
+        } catch (error) { s.report(error); }
+      }}
+    /></div>
+    {pasteOpen && <Modal title="Paste tab-separated activity edits" close={() => setPasteOpen(false)}>
+      <p>Include a header row. The code column matches existing activities; other columns are editable field names. All rows validate before committing.</p>
+      <textarea aria-label="TSV edits" rows={10} value={paste} onChange={e => setPaste(e.target.value)} placeholder={'code\tduration\nMIG\t18'} />
+      <button className="primary" onClick={applyPaste}>Apply edits</button>
+    </Modal>}
+  </section>;
+}

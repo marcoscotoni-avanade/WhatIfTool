@@ -1,0 +1,15 @@
+[package]
+name = "project-risk-planner"
+version = "0.1.0"
+description = "Local-first project schedule digital twin"
+authors = ["Project Risk Planner"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tempfile = "3"

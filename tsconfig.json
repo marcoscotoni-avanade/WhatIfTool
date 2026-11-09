@@ -1,0 +1,56 @@
+{
+  // Visit https://aka.ms/tsconfig to read more about this file
+  "compilerOptions": {
+    // File Layout
+    // "rootDir": "./src",
+    // "outDir": "./dist",
+
+    // Environment Settings
+    // See also https://aka.ms/tsconfig/module
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "esnext",
+    "types": ["node", "vite/client"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    // For nodejs:
+    // "lib": ["esnext"],
+    // "types": ["node"],
+    // and npm install -D @types/node
+
+    // Other Outputs
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+
+    // Stricter Typechecking Options
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": false,
+
+    // Style Options
+    // "noImplicitReturns": true,
+    // "noImplicitOverride": true,
+    // "noUnusedLocals": true,
+    // "noUnusedParameters": true,
+    // "noFallthroughCasesInSwitch": true,
+    // "noPropertyAccessFromIndexSignature": true,
+
+    // Recommended Options
+    "strict": true,
+    "jsx": "react-jsx",
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": true,
+    "moduleDetection": "force",
+    "skipLibCheck": true,
+    "erasableSyntaxOnly": true,
+    "baseUrl": ".",
+    "paths": {
+      "@planner/domain": ["packages/domain/src/index.ts"],
+      "@planner/scheduling": ["packages/scheduling/src/index.ts"],
+      "@planner/risk": ["packages/risk/src/index.ts"],
+      "@planner/scenarios": ["packages/scenarios/src/index.ts"],
+      "@planner/persistence": ["packages/persistence/src/index.ts"]
+    }
+  },
+  "include": ["apps/desktop/src", "apps/desktop/vite.config.ts", "packages", "tests", "vitest.config.ts"]
+}
