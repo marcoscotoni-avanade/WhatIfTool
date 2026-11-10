@@ -5,9 +5,9 @@ import { calculateProjectRisk } from '@planner/risk';
 const fields: Record<EntityType, ReadonlySet<string>> = {
   activity: new Set(['code', 'name', 'description', 'type', 'effortHours', 'duration', 'durationUnit', 'elapsedMode', 'scheduleMode',
     'plannedStart', 'plannedFinish', 'actualStart', 'actualFinish', 'constraintType', 'constraintDate', 'targetDate',
-    'intrinsicRisk', 'probabilityOfDelay', 'delayP80', 'calendarId', 'ownerId', 'status', 'graphPosition']),
+    'intrinsicRisk', 'probabilityOfDelay', 'delayP80', 'calendarId', 'ownerId', 'status', 'graphPosition', 'tags']),
   dependency: new Set(['predecessorId', 'successorId', 'type', 'lag', 'lagUnit', 'edgeWeight']),
-  project: new Set(['name', 'description', 'projectStart', 'targetFinish', 'defaultCalendarId', 'team']),
+  project: new Set(['name', 'description', 'projectStart', 'targetFinish', 'defaultCalendarId', 'team', 'tagCatalog']),
   settings: new Set(['riskThreshold', 'defaultDamping', 'transmissionCap', 'defaultImpactHorizon', 'riskColorThresholds']),
   calendar: new Set(['name', 'workingDays', 'workingIntervals', 'holidays', 'exceptions']),
 };
@@ -49,8 +49,8 @@ export function resolveScenario(m: ProjectModel, scenarioId?: string): ProjectSn
   return resolved;
 }
 export function validateDocument(m: ProjectModel): void {
-  parseProject(m);
-  for (const s of m.scenarios) resolveScenario(m, s.id);
+  const normalized = parseProject(m);
+  for (const s of normalized.scenarios) resolveScenario(normalized, s.id);
 }
 export function publishBaseline(m: ProjectModel, name: string, sourceId?: string): ProjectModel {
   const next = structuredClone(m), source = resolveScenario(m, sourceId);

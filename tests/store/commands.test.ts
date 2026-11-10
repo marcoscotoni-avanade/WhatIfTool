@@ -3,8 +3,37 @@ import { fixture } from '../helpers';
 import { useProjectStore as store } from '../../apps/desktop/src/store/useProjectStore';
 import { toModel } from '../../apps/desktop/src/store/document';
 import { resolveScenario } from '@planner/scenarios';
+import { activityPatch } from '../../apps/desktop/src/store/editing';
 
 beforeEach(() => store.getState().load(fixture()));
+it('does not allow free-form tag edits through generic activity fields', () => {
+  expect(() => activityPatch('tags', 'Critical', fixture().activities[0]!, '2026-11-09T09:00:00Z')).toThrow(/read-only/);
+});
+it('removes assignments when a tag is removed from the project catalog and supports undo', () => {
+  const m = fixture();
+  m.project.tagCatalog = ['Critical', 'Finance'];
+  m.activities[0]!.tags = ['Critical', 'Finance'];
+  store.getState().load(m);
+  expect(store.getState().setTagCatalog(['Finance'])).toBe(true);
+  expect(store.getState().document.project.tagCatalog).toEqual(['Finance']);
+  expect(store.getState().document.activitiesById['0']!.tags).toEqual(['Finance']);
+  store.getState().undo();
+  expect(store.getState().document.project.tagCatalog).toEqual(['Critical', 'Finance']);
+  expect(store.getState().document.activitiesById['0']!.tags).toEqual(['Critical', 'Finance']);
+});
+it('updates the project catalog and task tag assignments as scenario overrides', () => {
+  const m = fixture();
+  m.project.tagCatalog = ['Critical', 'Finance'];
+  m.activities[0]!.tags = ['Critical'];
+  store.getState().load(m);
+  store.getState().newScenario('Tag changes');
+  const scenarioId = store.getState().activeScenarioId!;
+  expect(store.getState().setTagCatalog(['critical', 'Finance'])).toBe(true);
+  const resolved = resolveScenario(toModel(store.getState().document), scenarioId);
+  expect(resolved.project.tagCatalog).toEqual(['critical', 'Finance']);
+  expect(resolved.activities[0]!.tags).toEqual(['critical']);
+  expect(store.getState().document.activitiesById['0']!.tags).toEqual(['Critical']);
+});
 it('undoes and redoes canonical changes and rejects invalid commands without history', () => {
   store.getState().updateActivities(['0'], { duration: 7 });
   expect(store.getState().document.activitiesById['0']!.duration).toBe(7);

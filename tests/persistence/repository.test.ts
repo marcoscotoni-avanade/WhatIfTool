@@ -27,9 +27,15 @@ it('round trips a real SQLite file with baselines, overrides, graph positions, s
 it('round trips JSON and quoted multiline CSV and validates imports atomically', () => {
   const m = createDemo();
   m.activities[0]!.name = 'Design, "review"\nSignoff';
+  m.activities[0]!.tags = ['Critical', 'Finance'];
+  m.project.tagCatalog = ['Critical', 'Finance'];
   expect(importJson(exportJson(m))).toEqual(m);
   expect(importCsv(m, toCsv(m.activities), 'activities').activities).toEqual(m.activities);
+  expect(importCsv(m, toCsv(m.activities), 'activities').project.tagCatalog).toEqual(['Critical', 'Finance']);
   expect(importCsv(m, toCsv(m.dependencies), 'dependencies').dependencies).toEqual(m.dependencies);
+  const legacy = JSON.parse(exportJson(m)) as ProjectModel;
+  delete legacy.project.tagCatalog;
+  expect(importJson(JSON.stringify(legacy)).project.tagCatalog).toEqual(['Critical', 'Finance']);
   expect(() => importJson('{"schemaVersion":2}')).toThrow();
   expect(() => importCsv(m, 'name,duration\nBad,-4', 'activities')).toThrow();
   expect(() => importJson(JSON.stringify({ ...m, activities: [{ ...m.activities[0]!, duration: -1 }] } satisfies Partial<ProjectModel>))).toThrow();
@@ -41,10 +47,13 @@ it('preserves team and owner in SQLite, JSON, CSV and baseline snapshots', async
   const repo = await SqliteProjectRepository.create(storage, () => resolve('node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'));
   const m = createDemo();
   m.project.team = { name: 'Team', calendarId: 'standard', members: [{ id: 'm', name: 'Marco', allocationPercent: 50 }] };
+  m.project.tagCatalog = ['Critical', 'Finance'];
   m.activities[0]!.ownerId = 'm';
+  m.activities[0]!.tags = ['Critical', 'Finance'];
   const withBaseline = createScenario(m, 'Scenario').model;
   expect(importJson(exportJson(withBaseline))).toEqual(withBaseline);
   expect(importCsv(m, toCsv(m.activities), 'activities').activities[0]!.ownerId).toBe('m');
+  expect(importCsv(m, toCsv(m.activities), 'activities').activities[0]!.tags).toEqual(['Critical', 'Finance']);
   await repo.saveProject(withBaseline);
   expect(await repo.loadProject(m.project.id)).toEqual(JSON.parse(JSON.stringify(withBaseline)));
   expect(repo.decode(repo.encode(createDemo())).project.team).toBeUndefined();

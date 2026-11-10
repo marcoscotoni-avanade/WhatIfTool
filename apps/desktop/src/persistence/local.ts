@@ -30,19 +30,20 @@ export function download(name: string, bytes: BlobPart, type = 'application/octe
   const url = URL.createObjectURL(new Blob([bytes], { type })), anchor = document.createElement('a');
   anchor.href = url; anchor.download = name; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-export async function saveProject(saveAs = false): Promise<void> {
+export async function saveProject(saveAs = false, options: { automatic?: boolean; notify?: boolean } = {}): Promise<boolean> {
   const s = useProjectStore.getState(), m = toModel(s.document), revision = s.revision, repo = await repository;
   let path = s.path;
-  if (isTauri() && (saveAs || !path)) {
+  if (isTauri() && (saveAs || !path) && !(options.automatic && !path)) {
     const { save } = await import('@tauri-apps/plugin-dialog');
     path = await save({ defaultPath: `${m.project.name}.pgplan`, filters: [{ name: 'Project Risk Planner', extensions: ['pgplan'] }] }) ?? undefined;
-    if (!path) return;
+    if (!path) return false;
   }
   const bytes = repo.encode(m, s.calculationStatus === 'ready' ? s.results : undefined);
   if (isTauri() && path) await invoke('write_project', { path, bytes: Array.from(bytes) });
   await repo.saveProject(m, s.calculationStatus === 'ready' ? s.results : undefined);
   if (!isTauri() && saveAs) download(`${m.project.name}.pgplan`, new Uint8Array(bytes).buffer);
-  useProjectStore.getState().saveCompleted(revision, path);
+  useProjectStore.getState().saveCompleted(revision, path, options.notify);
+  return true;
 }
 export async function openNativeProject(): Promise<void> {
   const { open } = await import('@tauri-apps/plugin-dialog'), { readFile } = await import('@tauri-apps/plugin-fs');

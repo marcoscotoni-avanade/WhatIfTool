@@ -37,12 +37,20 @@ export function toCsv(rows: object[], headers?: string[]): string {
 export function importCsv(m: ProjectModel, text: string, kind: 'activities' | 'dependencies'): ProjectModel {
   const next = structuredClone(m);
   const rows = parseCsv(text);
+  const parseTags = (value?: string): string[] | undefined => {
+    if (!value) return undefined;
+    const tags: unknown = value.trim().startsWith('[') ? JSON.parse(value) : value.split(',').map(tag => tag.trim()).filter(Boolean);
+    if (!Array.isArray(tags) || tags.some(tag => typeof tag !== 'string')) throw new Error('CSV task tags must be a comma-separated list or a JSON string array.');
+    return tags;
+  };
   if (kind === 'activities' && rows.some(r => r.elapsedMode && !['true', 'false'].includes(r.elapsedMode)))
     throw new Error('CSV elapsedMode must be true or false.');
   if (kind === 'activities') {
     next.activities = rows.map((r, i): Activity => ({
       id: r.id || crypto.randomUUID(), projectId: next.project.id, code: r.code || `ACT-${i + 1}`,
-      name: r.name || '', description: r.description, type: (r.type || 'TASK') as Activity['type'],
+      name: r.name || '', description: r.description,
+      tags: parseTags(r.tags),
+      type: (r.type || 'TASK') as Activity['type'],
       effortHours: Number(r.effortHours || 0), duration: Number(r.duration || 0),
       durationUnit: (r.durationUnit || 'd') as Activity['durationUnit'], elapsedMode: r.elapsedMode === 'true',
       scheduleMode: (r.scheduleMode || 'AUTO') as Activity['scheduleMode'], plannedStart: r.plannedStart || undefined,
@@ -53,6 +61,20 @@ export function importCsv(m: ProjectModel, text: string, kind: 'activities' | 'd
       status: (r.status || 'NOT_STARTED') as Activity['status'], targetDate: r.targetDate || undefined,
       graphPosition: r.graphPosition ? JSON.parse(r.graphPosition) as Activity['graphPosition'] : { x: (i % 5) * 330, y: Math.floor(i / 5) * 240 },
     }));
+    const assignedTags = next.activities.flatMap(activity => activity.type === 'TASK' ? activity.tags ?? [] : []);
+    if (next.project.tagCatalog !== undefined || assignedTags.length) {
+      const catalog = next.project.tagCatalog ?? [], known = new Set(catalog.map(tag => tag.toLocaleLowerCase()));
+      next.project.tagCatalog = [...catalog, ...assignedTags.filter(tag => {
+        const key = tag.toLocaleLowerCase();
+        if (known.has(key)) return false;
+        known.add(key);
+        return true;
+      })];
+      const canonicalTags = new Map(next.project.tagCatalog.map(tag => [tag.toLocaleLowerCase(), tag]));
+      for (const activity of next.activities) {
+        if (activity.type === 'TASK' && activity.tags) activity.tags = activity.tags.map(tag => canonicalTags.get(tag.toLocaleLowerCase()) ?? tag);
+      }
+    }
   } else {
     next.dependencies = rows.map((r): Dependency => ({
       id: r.id || crypto.randomUUID(), projectId: next.project.id, predecessorId: r.predecessorId || '',

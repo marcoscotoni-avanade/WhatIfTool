@@ -7,7 +7,7 @@ import { activityPatch, editableActivityFields } from '../store/editing';
 import { Modal, fullDate, num, useResolved } from '../components/shared';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
-type Row = Activity & { calculatedStart?: string; calculatedFinish?: string; totalSlack?: number; risk?: number; predecessors: string };
+type Row = Activity & { calculatedStart?: string; calculatedFinish?: string; totalSlack?: number; risk?: number; predecessors: string; tagsText: string };
 const theme = themeQuartz.withParams({ fontSize: 12, headerHeight: 34, rowHeight: 32, accentColor: '#217f93', borderColor: '#dce4eb', backgroundColor: '#ffffff', foregroundColor: '#243c4f' });
 export function ActivityGrid() {
   const s = useProjectStore(), m = useResolved(), api = useRef<GridApi<Row> | null>(null);
@@ -18,6 +18,7 @@ export function ActivityGrid() {
     ...a, calculatedStart: s.results?.schedule.activities[a.id]?.calculatedStart, calculatedFinish: s.results?.schedule.activities[a.id]?.calculatedFinish,
     totalSlack: s.results?.schedule.activities[a.id]?.totalSlack, risk: s.results?.risk[a.id]?.totalRisk,
     predecessors: m.dependencies.filter(d => d.successorId === a.id).map(d => `${m.activities.find(p => p.id === d.predecessorId)?.code} ${d.type}${d.lag ? `${d.lag > 0 ? '+' : ''}${d.lag}${d.lagUnit}` : ''}`).join(', '),
+    tagsText: a.type === 'TASK' ? (a.tags ?? []).join(', ') : '',
   })), [m, s.results]);
   const columns = useMemo<ColDef<Row>[]>(() => [
     { field: 'code', width: 105, pinned: 'left' }, { field: 'name', headerName: 'Activity', width: 205, pinned: 'left' },
@@ -26,6 +27,8 @@ export function ActivityGrid() {
     { field: 'ownerId', headerName: 'Owner', width: 150, cellEditor: 'agSelectCellEditor',
       cellEditorParams: { values: ['', ...(m.project.team?.members ?? []).map(member => member.id)] },
       valueFormatter: p => m.project.team?.members.find(member => member.id === p.value)?.name ?? 'No owner' },
+    { field: 'tagsText', headerName: 'Tags', width: 180, editable: false, filter: 'agTextColumnFilter',
+      filterParams: { filterOptions: ['contains', 'notContains', 'equals'], defaultOption: 'contains', maxNumConditions: 1 } },
     { field: 'durationUnit', headerName: 'Unit', width: 75, cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['d', 'h'] } },
     { field: 'scheduleMode', width: 125, cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['AUTO', 'MANUAL'] } },
     ...(['plannedStart', 'plannedFinish', 'calculatedStart', 'calculatedFinish'] as const).map(field => ({ field, width: 175,

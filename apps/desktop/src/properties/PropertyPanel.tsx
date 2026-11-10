@@ -34,10 +34,25 @@ export function PropertyPanel() {
   const dateInput = (label: string, field: 'plannedStart' | 'plannedFinish' | 'actualStart' | 'actualFinish' | 'constraintDate' | 'targetDate') =>
     <Field label={label} type="datetime-local" value={a[field]?.slice(0, 16)} disabled={immutable} onCommit={value => update(field, value ? iso(`${value}Z`) : '')} />;
   const overrides = s.document.overrides.filter(o => o.scenarioId === s.activeScenarioId && o.entityId === a.id);
+  const selectedTags = a.tags ?? [];
   return <aside className="properties"><div className="inspector-heading"><h2>{a.code}</h2><span>{s.selectedActivityIds.length > 1 ? `${s.selectedActivityIds.length} selected` : a.type}</span></div>
     {immutable && <p className="info-box">Published baseline is read-only. Create or clone a scenario to experiment.</p>}
     <details open><summary>General</summary>{input('Activity code', 'code')}{input('Activity name', 'name')}
       <DescriptionField value={a.description} disabled={immutable} onCommit={value => update('description', value)} />
+      {a.type === 'TASK' && <>
+        <label className="field"><span>Tags (read-only)</span><input aria-label="Tags (read-only)" value={selectedTags.join(', ')} readOnly /></label>
+        <details className="task-tag-picker"><summary>Select tags ({selectedTags.length})</summary>
+          {m.project.tagCatalog?.length
+            ? <div className="task-tag-options">{m.project.tagCatalog.map(tag => <label key={tag}>
+              <input type="checkbox" checked={selectedTags.includes(tag)} disabled={immutable}
+                onChange={event => {
+                  const tags = event.target.checked ? [...selectedTags, tag] : selectedTags.filter(value => value !== tag);
+                  s.updateActivities([a.id], { tags: tags.length ? tags : undefined });
+                }} />{tag}
+            </label>)}</div>
+            : <small>No tags defined. Add tags in Setup.</small>}
+        </details>
+      </>}
       {input('Activity type', 'type', 'text', ['TASK', 'MILESTONE', 'SUMMARY'])}
       {input('Status', 'status', 'text', ['NOT_STARTED', 'IN_PROGRESS', 'COMPLETE'])}</details>
     <details open><summary>Scheduling <small>UTC</small></summary><div className="field-pair">{input('Effort (hours)', 'effortHours', 'number')}{input('Duration', 'duration', 'number')}</div>

@@ -23,6 +23,34 @@ export function NameDialog({ kind, close }: { kind: 'new' | 'scenario' | 'clone'
     {kind === 'baseline' && <p>This creates a new immutable version. Existing baselines and scenarios remain unchanged.</p>}
     <button className="primary" type="submit">{kind === 'baseline' ? 'Publish baseline' : 'Create / apply'}</button></form></Modal>;
 }
+export function GlobalSetupDialog({ close, autoSaveEnabled, onAutoSaveChange, tagCatalog, tagsDisabled, onTagCatalogChange }: {
+  close: () => void; autoSaveEnabled: boolean; onAutoSaveChange: (enabled: boolean) => void;
+  tagCatalog: string[]; tagsDisabled: boolean; onTagCatalogChange: (tags: string[]) => boolean;
+}) {
+  const [tags, setTags] = useState(tagCatalog), [newTag, setNewTag] = useState('');
+  const normalizedTag = newTag.trim();
+  const addTag = () => {
+    if (!normalizedTag || normalizedTag.includes(',') || tags.some(tag => tag.toLocaleLowerCase() === normalizedTag.toLocaleLowerCase())) return;
+    setTags(previous => [...previous, normalizedTag]);
+    setNewTag('');
+  };
+  return <Modal title="Setup" close={close}>
+    <label className="check"><input aria-label="Enable auto-save" type="checkbox" checked={autoSaveEnabled}
+      onChange={event => onAutoSaveChange(event.target.checked)} />Auto-save every minute</label>
+    <p>Automatic saves run only when there are unsaved changes. They do not show the green save confirmation.</p>
+    <h3>Project tag catalog</h3>
+    <p>Manage the tags available for task cards.</p>
+    <div className="tag-catalog-add"><input aria-label="New tag" value={newTag} disabled={tagsDisabled}
+      onChange={event => setNewTag(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addTag(); } }} />
+      <button disabled={tagsDisabled || !normalizedTag || normalizedTag.includes(',') || tags.some(tag => tag.toLocaleLowerCase() === normalizedTag.toLocaleLowerCase())}
+        onClick={addTag}>Add tag</button></div>
+    <div className="tag-catalog">{tags.map(tag => <span className="tag-catalog-item" key={tag}>{tag}
+      <button aria-label={`Remove tag ${tag}`} disabled={tagsDisabled} onClick={() => setTags(previous => previous.filter(value => value !== tag))}>×</button>
+    </span>)}</div>
+    {tagsDisabled && <p className="info-box">Published baseline is read-only. Create or select an editable scenario to manage its tag catalog.</p>}
+    <button className="primary" disabled={tagsDisabled} onClick={() => { if (onTagCatalogChange(tags)) close(); }}>Apply tag catalog</button>
+  </Modal>;
+}
 export function DependencyDialog({ close }: { close: () => void }) {
   const s = useProjectStore(), m = useResolved();
   const [predecessor, setPredecessor] = useState(s.selectedActivityIds[0] ?? m.activities[0]?.id ?? '');

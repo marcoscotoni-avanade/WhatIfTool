@@ -3,12 +3,12 @@ export type DependencyType = 'FS' | 'SS' | 'FF' | 'SF';
 export type ConstraintType = 'ASAP' | 'START_NO_EARLIER_THAN' | 'FINISH_NO_LATER_THAN' | 'MUST_START_ON' | 'MUST_FINISH_ON';
 export interface Project {
   id: string; name: string; description?: string; projectStart: string; targetFinish?: string;
-  defaultCalendarId: string; createdAt: string; modifiedAt: string; team?: Team;
+  defaultCalendarId: string; createdAt: string; modifiedAt: string; team?: Team; tagCatalog?: string[];
 }
 export interface TeamMember { id: string; name: string; allocationPercent: number }
 export interface Team { name: string; calendarId: string; members: TeamMember[] }
 export interface Activity {
-  id: string; projectId: string; code: string; name: string; description?: string;
+  id: string; projectId: string; code: string; name: string; description?: string; tags?: string[];
   type: 'TASK' | 'MILESTONE' | 'SUMMARY';
   effortHours: number; duration: number; durationUnit: DurationUnit; elapsedMode: boolean;
   scheduleMode: 'AUTO' | 'MANUAL';

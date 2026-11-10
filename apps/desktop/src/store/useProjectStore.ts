@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { createActivity, createProject, validateProject, type Activity, type CalculationResults, type Dependency, type EntityType, type ProjectModel, type ScenarioComparison } from '@planner/domain';
+import { createActivity, createProject, parseProject, validateProject, type Activity, type CalculationResults, type Dependency, type EntityType, type ProjectModel, type ScenarioComparison } from '@planner/domain';
 import { createScenario, deleteScenario, publishBaseline, resolveScenario, validateDocument, writeOverride } from '@planner/scenarios';
 import { command, normalize, toModel, type DocumentCommand, type DocumentState } from './document';
 import { proposeDuration, type DurationProposal } from './durationProposal';
@@ -17,10 +17,10 @@ interface Store {
   requestEdit(name: string, mutate: (m: ProjectModel) => ProjectModel): boolean;
   finishEdit(selectedIds?: string[]): void;
   updateActivityPatches(patches: { id: string; patch: Partial<Activity> }[]): boolean;
-  load(m: ProjectModel, path?: string): void; saveCompleted(revision: number, path?: string): void;
-  updateEntity(type: EntityType, id: string, patch: Record<string, unknown>): void;
+  load(m: ProjectModel, path?: string): void; saveCompleted(revision: number, path?: string, notify?: boolean): void;
+  updateEntity(type: EntityType, id: string, patch: Record<string, unknown>): void; setTagCatalog(tags: string[]): boolean;
   updateActivities(ids: string[], patch: Partial<Activity>): void;
-  addActivity(milestone?: boolean): void; duplicateSelection(): void; deleteSelection(): void;
+  addActivity(milestone?: boolean, graphPosition?: Activity['graphPosition']): void; duplicateSelection(): void; deleteSelection(): void;
   connect(predecessorId: string, successorId: string, type?: Dependency['type'], lag?: number, lagUnit?: Dependency['lagUnit']): void;
   select(ids: string[], dependencyId?: string): void;
   activateScenario(id?: string): void; newScenario(name: string, clone?: boolean): void;
@@ -115,13 +115,16 @@ export const useProjectStore = create<Store>((set, get) => ({
   },
   load: (m, path) => {
     try {
-      validateDocument(m);
-      set(s => ({ document: normalize(m), revision: s.revision + 1, dirty: false, path, activeScenarioId: undefined,
+      const normalized = parseProject(m);
+      validateDocument(normalized);
+      set(s => ({ document: normalize(normalized), revision: s.revision + 1, dirty: false, path, activeScenarioId: undefined,
         selectedActivityIds: [], selectedDependencyId: undefined, activeMilestoneId: undefined, history: [], future: [],
         pendingEdit: undefined, results: undefined, comparison: undefined, error: undefined, calculationStatus: 'calculating' }));
     } catch (error) { get().report(error); }
   },
-  saveCompleted: (revision, path) => set(s => ({ dirty: s.revision !== revision, path: path ?? s.path, notice: 'Project saved locally.' })),
+  saveCompleted: (revision, path, notify = true) => set(s => ({
+    dirty: s.revision !== revision, path: path ?? s.path, ...(notify ? { notice: 'Project saved locally.' } : {}),
+  })),
   updateEntity: (type, id, patch) => {
     const apply = type === 'calendar' || (type === 'project' && ('team' in patch || 'defaultCalendarId' in patch)) ? get().requestEdit : get().commit;
     apply(`Update ${type}`, m => {
@@ -138,6 +141,35 @@ export const useProjectStore = create<Store>((set, get) => ({
       }
       return m;
     });
+  },
+  setTagCatalog: tags => {
+    const state = get(), catalog = tags.map(tag => tag.trim()), keys = catalog.map(tag => tag.toLocaleLowerCase());
+    if (catalog.some(tag => !tag || tag.includes(',')) || new Set(keys).size !== keys.length) {
+      get().report('Tag names must be non-empty, comma-free and unique.');
+      return false;
+    }
+    return get().commit('Update tag catalog', model => {
+      const resolved = resolveScenario(model, state.activeScenarioId);
+      const canonicalTags = new Map(catalog.map(tag => [tag.toLocaleLowerCase(), tag]));
+      const normalizeTags = (activity: Activity) => (activity.tags ?? []).flatMap(tag => {
+        const canonical = canonicalTags.get(tag.toLocaleLowerCase());
+        return canonical ? [canonical] : [];
+      });
+      if (state.activeScenarioId) {
+        writeOverride(model, state.activeScenarioId, 'project', model.project.id, 'tagCatalog', catalog);
+        for (const activity of resolved.activities.filter(a => a.type === 'TASK' && JSON.stringify(a.tags ?? []) !== JSON.stringify(normalizeTags(a)))) {
+          const tags = normalizeTags(activity);
+          writeOverride(model, state.activeScenarioId, 'activity', activity.id, 'tags', tags.length ? tags : undefined);
+        }
+      } else {
+        model.project.tagCatalog = catalog;
+        for (const activity of model.activities.filter(a => a.type === 'TASK' && JSON.stringify(a.tags ?? []) !== JSON.stringify(normalizeTags(a)))) {
+          const tags = normalizeTags(activity);
+          activity.tags = tags.length ? tags : undefined;
+        }
+      }
+      return model;
+    }, state.activeScenarioId);
   },
   updateActivities: (ids, patch) => {
     get().updateActivityPatches(ids.map(id => ({ id, patch })));
@@ -156,9 +188,10 @@ export const useProjectStore = create<Store>((set, get) => ({
       return m;
     });
   },
-  addActivity: (milestone = false) => {
+  addActivity: (milestone = false, graphPosition) => {
     const state = get(), resolved = resolveScenario(toModel(state.document), state.activeScenarioId);
     const a = createActivity(resolved.project.id, resolved.activities.length + 1, milestone);
+    if (graphPosition) a.graphPosition = graphPosition;
     const codes = new Set(resolved.activities.map(x => x.code));
     let n = resolved.activities.length + 1;
     while (codes.has(a.code)) a.code = `${milestone ? 'MS' : 'ACT'}-${++n}`;

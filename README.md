@@ -93,7 +93,9 @@ ELK and AG Grid are sizeable local vendor chunks; no CDN is used.
 ## Features
 
 - React Flow graph: create, connect, edit edges, drag, multi-select, duplicate/delete,
-  pan/zoom, fit view, minimap, automatic ELK layout and saved manual positions.
+  pan/zoom, fit view, minimap, automatic ELK layout and saved manual positions. Task cards
+  show the assigned owner and tags as chips; manage the project tag catalog in **Setup**, assign
+  tags from the inspector, and filter the read-only Tags column in the Activity Grid.
 - AG Grid Community: create rows, inline edit, sort/filter, multi-select, bulk changes,
   copy selected rows and validated paste of header-based TSV.
 - Synchronized graph/grid selection and one normalized Zustand canonical document.
@@ -108,7 +110,8 @@ ELK and AG Grid are sizeable local vendor chunks; no CDN is used.
   promote to a **new** baseline and baseline comparison.
 - Milestone focus dims unrelated nodes and highlights upstream risk paths. Marginal
   contributor analysis reports each ancestor once.
-- Local `.pgplan` SQLite files, new/open/save/save-as, recent projects, JSON/CSV exchange.
+- Local `.pgplan` SQLite files, new/open/save/save-as, recent projects, JSON/CSV exchange,
+  and optional once-per-minute auto-save configured in **Setup**.
 - Reversible document commands, keyboard undo/redo, validation before mutation, unsaved-change
   guards and visible errors. Ctrl+S saves, Ctrl+Shift+S saves as, Ctrl+O opens, Ctrl+Z/Y undo/redo.
 
@@ -134,9 +137,13 @@ actual dates and hard constraints can pin dates and produce visible conflicts.
 
 On desktop, **Save** and **Save As** use native dialogs and atomically replace a `.pgplan`
 file (SQLite format 3). The app also retains the SQLite document in local WebView IndexedDB
-for recent-project recovery. An explicit file save is the portable backup.
+for recent-project recovery. **Setup** can enable auto-save every minute when there are
+unsaved changes. It silently updates IndexedDB and, when a `.pgplan` path is already associated,
+that file too; it does not open a file dialog. The manual **Save** action still shows its green
+confirmation. An explicit file save is the portable backup.
 
-In the browser, **Save** persists to IndexedDB; **Save As** additionally downloads `.pgplan`.
+In the browser, **Save** persists to IndexedDB; optional auto-save does the same silently, while
+**Save As** additionally downloads `.pgplan`.
 **Open** reads a SQLite project file. JSON exports contain the entire document, including all
 baseline versions, settings and overrides. CSV activity/dependency exports use IDs for references;
 CSV results are read-only calculated output. CSV import replaces one working-draft collection,

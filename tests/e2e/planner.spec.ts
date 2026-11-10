@@ -110,6 +110,77 @@ test('creates activities in both views, layouts, and reopens a downloaded SQLite
   await expect(page.locator('.project-heading')).toContainText('File Round Trip');
 });
 
+test('right-click task cards duplicates the selected task or creates a nearby task', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open Demo Project', exact: true }).click();
+  const taskCard = page.locator('.react-flow__node[data-id="activity-2"]');
+  await taskCard.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Duplicate task card' }).click();
+  await expect(page.locator('.react-flow__node')).toHaveCount(9);
+  await expect(page.getByRole('combobox', { name: 'Activity type', exact: true })).toHaveValue('TASK');
+  await taskCard.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'New task card' }).click();
+  await expect(page.locator('.react-flow__node')).toHaveCount(10);
+  await expect(page.getByRole('combobox', { name: 'Activity type', exact: true })).toHaveValue('TASK');
+});
+
+test('project tag catalog assigns tags, filters the grid, and pane context creates a task', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Create New Project', exact: true }).click();
+  await page.getByRole('button', { name: 'Create / apply', exact: true }).click();
+  await page.getByRole('button', { name: '+ Activity', exact: true }).click();
+
+  await page.getByRole('button', { name: 'Setup', exact: true }).click();
+  await page.getByRole('textbox', { name: 'New tag', exact: true }).fill('Critical');
+  await page.getByRole('button', { name: 'Add tag', exact: true }).click();
+  await page.getByRole('textbox', { name: 'New tag', exact: true }).fill('Finance');
+  await page.getByRole('button', { name: 'Add tag', exact: true }).click();
+  await page.getByRole('button', { name: 'Apply tag catalog', exact: true }).click();
+
+  await page.getByText('Select tags (0)', { exact: true }).click();
+  await page.getByLabel('Critical', { exact: true }).check();
+  await page.getByLabel('Finance', { exact: true }).check();
+  await expect(page.getByRole('textbox', { name: 'Tags (read-only)', exact: true })).toHaveValue('Critical, Finance');
+  const task = page.locator('.react-flow__node.selected');
+  await expect(task.locator('.task-tag-chip')).toHaveText(['Critical', 'Finance']);
+  const taskId = await task.getAttribute('data-id');
+  const tagCell = page.locator(`.ag-center-cols-container [row-id="${taskId}"] [col-id="tagsText"]`);
+  await expect(tagCell).toHaveText('Critical, Finance');
+
+  const pane = page.locator('.react-flow__pane');
+  const paneBox = await pane.boundingBox();
+  expect(paneBox).not.toBeNull();
+  await pane.click({ button: 'right', position: { x: paneBox!.width - 250, y: 30 } });
+  const menuItems = page.getByRole('menuitem');
+  await expect(menuItems).toHaveCount(1);
+  await expect(menuItems.first()).toHaveText('New task card');
+  await menuItems.first().click();
+  await expect(page.locator('.react-flow__node')).toHaveCount(2);
+  await expect(page.locator('.ag-center-cols-container .ag-row')).toHaveCount(2);
+  await page.locator('.ag-header-cell[col-id="tagsText"] .ag-header-cell-filter-button').click();
+  const tagFilter = page.locator('.ag-popup .ag-filter input').first();
+  await tagFilter.fill('Critical');
+  await expect(page.locator('.ag-center-cols-container .ag-row')).toHaveCount(1);
+  await expect(page.locator('.ag-center-cols-container [row-id] [col-id="tagsText"]')).toHaveText('Critical, Finance');
+});
+
+test('global setup auto-saves every minute without a banner while manual save keeps its confirmation', async ({ page }) => {
+  await page.clock.install();
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Create New Project', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Auto Save Test');
+  await page.getByRole('button', { name: 'Create / apply', exact: true }).click();
+  await page.getByRole('button', { name: '+ Activity', exact: true }).click();
+  await page.getByRole('button', { name: 'Setup', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Enable auto-save' }).check();
+  await page.clock.fastForward(60_000);
+  await expect(page.getByRole('img', { name: 'Auto-save completed' })).toBeVisible();
+  await expect(page.getByText('Project saved locally.', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByText('Project saved locally.', { exact: true })).toBeVisible();
+});
+
 test('team owner and effort proposals support accept, keep and undo', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Create New Project', exact: true }).click();
@@ -125,6 +196,8 @@ test('team owner and effort proposals support accept, keep and undo', async ({ p
   await page.getByRole('button', { name: '+ Activity', exact: true }).click();
   await page.getByRole('combobox', { name: 'Owner', exact: true }).selectOption({ label: 'Marco (50%)' });
   await page.getByRole('button', { name: 'Keep durations', exact: true }).click();
+  const taskCard = page.locator('.react-flow__node').first();
+  await expect(taskCard.locator('.node-owner')).toContainText('Marco');
   await page.getByRole('spinbutton', { name: 'Effort (hours)', exact: true }).fill('40');
   await page.getByRole('spinbutton', { name: 'Effort (hours)', exact: true }).press('Tab');
   const proposal = page.getByRole('dialog', { name: 'Recalculate duration?' });

@@ -13,9 +13,13 @@ Calendar working days use JavaScript numbering (Sunday = 0).
 
 An optional `project.team` contains `name`, `calendarId` and `members`, each with a unique
 `id`, `name` and `allocationPercent` between 0 and 100. An optional activity `ownerId` refers
-to one team member. Team metadata is part of project snapshots and can be overridden in a
-scenario. Older schema version 1 documents without a team remain valid and unchanged; the
-optional fields use the existing project/activity JSON payloads in SQLite and JSON.
+to one team member. `project.tagCatalog` is the project-scoped list of unique, non-empty tag
+names; optional task `tags` references zero or more catalog entries. Setup manages the catalog;
+the task inspector assigns tags from a multi-select list, and task cards render them as chips.
+The Activity Grid exposes a read-only comma-separated Tags value for filtering. Removing a
+catalog entry removes its assignments from tasks. Team metadata and the tag catalog are part of
+project snapshots and can be overridden in a scenario. Older schema version 1 documents without
+a team or catalog remain valid; existing task tags seed a missing catalog during loading.
 
 Dependencies are directed FS, SS, FF or SF edges. Self-edges, duplicate directed pairs,
 missing endpoints and cycles are rejected. Negative lag is supported.

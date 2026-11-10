@@ -8,27 +8,51 @@ import { ActivityGrid } from './grid/ActivityGrid';
 import { PropertyPanel } from './properties/PropertyPanel';
 import { Explorer } from './components/Explorer';
 import { Comparison } from './scenarios/Comparison';
-import { DependencyDialog, ExchangeDialog, NameDialog, ProjectSettingsDialog, RecentDialog } from './components/Dialogs';
+import { DependencyDialog, ExchangeDialog, GlobalSetupDialog, NameDialog, ProjectSettingsDialog, RecentDialog } from './components/Dialogs';
 import { Modal, displayDate, num, useResolved } from './components/shared';
 import { DurationProposalDialog, TeamDialog } from './components/TeamDialogs';
 import { openNativeProject, repository, saveProject } from './persistence/local';
 import './styles/app.css';
 
-type Dialog = 'new' | 'scenario' | 'clone' | 'rename' | 'baseline' | 'dependency' | 'exchange' | 'settings' | 'recent' | 'compare' | 'team';
+type Dialog = 'globalSetup' | 'new' | 'scenario' | 'clone' | 'rename' | 'baseline' | 'dependency' | 'exchange' | 'settings' | 'recent' | 'compare' | 'team';
+const AUTO_SAVE_KEY = 'project-risk-planner.auto-save';
 export default function App() {
   const s = useProjectStore(), m = useResolved(), [dialog, setDialog] = useState<Dialog>(), [welcome, setWelcome] = useState(true);
   const [pendingAction, setPendingAction] = useState<(() => void) | undefined>(), [saving, setSaving] = useState(false);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(false), [autoSavePulse, setAutoSavePulse] = useState(0);
+  const savingRef = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null), [graphPercent, setGraphPercent] = useState(61), workspace = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setDialog(undefined), []);
   const immutable = !!s.activeScenarioId && !!s.document.scenariosById[s.activeScenarioId]?.isBaseline;
   const guard = useCallback((action: () => void) => {
     if (useProjectStore.getState().dirty) setPendingAction(() => action); else action();
   }, []);
-  const save = useCallback(async (saveAs = false) => {
+  const save = useCallback(async (saveAs = false, automatic = false): Promise<boolean> => {
+    if (savingRef.current) return false;
+    savingRef.current = true;
     setSaving(true);
-    try { await saveProject(saveAs); } catch (error) { useProjectStore.getState().report(error); }
-    finally { setSaving(false); }
+    try { return await saveProject(saveAs, { automatic, notify: !automatic }); }
+    catch (error) { useProjectStore.getState().report(error); return false; }
+    finally { savingRef.current = false; setSaving(false); }
   }, []);
+  const updateAutoSave = useCallback((enabled: boolean) => {
+    try {
+      localStorage.setItem(AUTO_SAVE_KEY, String(enabled));
+      setAutoSaveEnabled(enabled);
+    } catch (error) { useProjectStore.getState().report(error); }
+  }, []);
+  useEffect(() => {
+    try { setAutoSaveEnabled(localStorage.getItem(AUTO_SAVE_KEY) === 'true'); }
+    catch (error) { useProjectStore.getState().report(error); }
+  }, []);
+  useEffect(() => {
+    if (!autoSaveEnabled) return;
+    const timer = window.setInterval(() => {
+      if (!useProjectStore.getState().dirty || savingRef.current) return;
+      void save(false, true).then(saved => { if (saved) setAutoSavePulse(pulse => pulse + 1); });
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [autoSaveEnabled, save]);
   const open = useCallback(() => guard(() => {
     if (isTauri()) void openNativeProject().catch(useProjectStore.getState().report); else fileInput.current?.click();
   }), [guard]);
@@ -91,9 +115,12 @@ export default function App() {
   return <main className="app-shell">
     <header className="app-header"><div className="brand"><span className="brand-mark">P<span>R</span></span><div><b>PROJECT RISK PLANNER</b><small>Schedule digital twin</small></div></div>
       <div className="project-heading"><strong>{m.project.name}{s.dirty ? ' *' : ''}</strong><span>{s.activeScenarioId ? s.document.scenariosById[s.activeScenarioId]?.name : 'Working draft'}</span></div>
-      <div className="file-actions"><button onClick={() => guard(() => setDialog('new'))}>New</button><button onClick={open}>Open</button>
+      <div className="file-actions"><button onClick={() => setDialog('globalSetup')}>Setup</button><button onClick={() => guard(() => setDialog('new'))}>New</button><button onClick={open}>Open</button>
         <button onClick={() => guard(() => setDialog('exchange'))}>Import / Export</button><button disabled={saving} onClick={() => void save(true)}>Save As</button>
-        <button className="primary" disabled={saving} onClick={() => void save()}>{saving ? 'Saving...' : 'Save'}</button></div></header>
+        <button className="primary" disabled={saving} onClick={() => void save()}>{saving ? 'Saving...' : 'Save'}</button>
+        {autoSavePulse > 0 && <span key={autoSavePulse} className="auto-save-indicator" role="img" aria-label="Auto-save completed" title="Auto-save completed">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 1h10l3 3v11H1V1h1zm2 1v4h7V2H4zm0 7v5h8V9H4zm1 1h6v3H5v-3z" /></svg>
+        </span>}</div></header>
     <nav className="toolbar" aria-label="Planning toolbar">
       <div><button disabled={immutable} onClick={() => s.addActivity()}>+ Activity</button><button disabled={immutable} onClick={() => s.addActivity(true)}>+ Milestone</button>
         <button disabled={immutable || m.activities.length < 2} onClick={() => setDialog('dependency')}>Add Dependency</button>
@@ -140,6 +167,8 @@ export default function App() {
       <div className="welcome-actions"><button onClick={() => { setWelcome(false); setDialog('new'); }}>Create New Project</button><button onClick={() => { setWelcome(false); setDialog('recent'); }}>Recent Projects</button><button onClick={() => { setWelcome(false); open(); }}>Open Project</button></div>
     </Modal>}
     {dialog && ['new', 'scenario', 'clone', 'rename', 'baseline'].includes(dialog) && <NameDialog kind={dialog as 'new' | 'scenario' | 'clone' | 'rename' | 'baseline'} close={close} />}
+    {dialog === 'globalSetup' && <GlobalSetupDialog close={close} autoSaveEnabled={autoSaveEnabled} onAutoSaveChange={updateAutoSave}
+      tagCatalog={m.project.tagCatalog ?? []} tagsDisabled={immutable} onTagCatalogChange={s.setTagCatalog} />}
     {dialog === 'dependency' && <DependencyDialog close={close} />}{dialog === 'settings' && <ProjectSettingsDialog close={close} />}
     {dialog === 'recent' && <RecentDialog close={close} />}{dialog === 'exchange' && <ExchangeDialog close={close} />}
     {dialog === 'compare' && <Comparison close={close} />}

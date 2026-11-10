@@ -37,6 +37,10 @@ export function validateProject(m: ProjectSnapshot): void {
       if (typeof member.name !== 'string' || !member.name.trim() || !finite(member.allocationPercent, 0, 100))
         fail('Team members require a name and allocation between 0 and 100%.');
   }
+  const tagCatalog = m.project.tagCatalog ?? [];
+  if (!Array.isArray(tagCatalog) || tagCatalog.some(tag => typeof tag !== 'string' || !tag.trim() || tag.includes(','))
+    || new Set(tagCatalog.map(tag => tag.toLocaleLowerCase())).size !== tagCatalog.length) fail('Project tag catalog entries must be non-empty, comma-free and unique.');
+  const catalog = new Set(tagCatalog.map(tag => tag.toLocaleLowerCase()));
   for (const c of m.calendars) {
     if (!c.workingDays?.length || c.workingDays.some(d => !Number.isInteger(d) || d < 0 || d > 6)
       || !c.workingIntervals?.length || !intervalsValid(c.workingIntervals)) fail(`Invalid working calendar ${c.name}.`);
@@ -55,6 +59,8 @@ export function validateProject(m: ProjectSnapshot): void {
     if (a.calendarId && !calendars.has(a.calendarId)) fail(`Missing calendar: ${a.code}.`);
     if (a.ownerId !== undefined && (typeof a.ownerId !== 'string' || !a.ownerId.trim() || !team?.members.some(member => member.id === a.ownerId)))
       fail(`Missing team owner: ${a.code}.`);
+    if (a.tags !== undefined && (a.type !== 'TASK' || !Array.isArray(a.tags) || a.tags.some(tag => typeof tag !== 'string' || !tag.trim() || !catalog.has(tag.toLocaleLowerCase()))
+      || new Set(a.tags.map(tag => tag.toLocaleLowerCase())).size !== a.tags.length)) fail(`Invalid activity tags: ${a.code}.`);
     if (!a.graphPosition || !finite(a.graphPosition.x, -Infinity) || !finite(a.graphPosition.y, -Infinity)) fail(`Invalid graph position: ${a.code}.`);
     for (const key of ['plannedStart', 'plannedFinish', 'actualStart', 'actualFinish', 'constraintDate', 'targetDate'] as const)
       if (a[key] && !date(a[key])) fail(`Invalid ${key}: ${a.code}.`);
@@ -97,8 +103,24 @@ export function validateProject(m: ProjectSnapshot): void {
 }
 export function parseProject(value: unknown): ProjectModel {
   if (typeof value !== 'object' || value === null) fail('Expected a project document.');
-  const m = value as ProjectModel;
+  const m = structuredClone(value) as ProjectModel;
   if (m.schemaVersion !== 1 || !Array.isArray(m.scenarios) || !Array.isArray(m.overrides) || !Array.isArray(m.baselines)) fail('Unsupported project document version.');
+  const ensureCatalog = (snapshot: ProjectSnapshot) => {
+    const assignedTags = snapshot.activities.flatMap(activity => activity.type === 'TASK' && Array.isArray(activity.tags)
+      ? activity.tags.filter((tag): tag is string => typeof tag === 'string') : []);
+    if (snapshot.project.tagCatalog === undefined && !assignedTags.length) return;
+    const catalog = snapshot.project.tagCatalog === undefined ? [] : Array.isArray(snapshot.project.tagCatalog) ? snapshot.project.tagCatalog : [];
+    if (!Array.isArray(snapshot.project.tagCatalog) && snapshot.project.tagCatalog !== undefined) return;
+    const known = new Set(catalog.filter((tag): tag is string => typeof tag === 'string').map(tag => tag.toLocaleLowerCase()));
+    snapshot.project.tagCatalog = [...catalog, ...assignedTags.filter(tag => {
+      const key = tag.toLocaleLowerCase();
+      if (known.has(key)) return false;
+      known.add(key);
+      return true;
+    })];
+  };
+  ensureCatalog(m);
+  for (const baseline of m.baselines) ensureCatalog(baseline.snapshot);
   validateProject(m);
   unique(m.scenarios.map(s => s.id), 'scenario');
   unique(m.baselines.map(b => b.id), 'baseline');
