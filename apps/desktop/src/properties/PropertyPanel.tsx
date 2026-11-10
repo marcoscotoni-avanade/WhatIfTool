@@ -1,7 +1,16 @@
+import { useEffect, useState } from 'react';
 import { iso, type Activity } from '@planner/domain';
 import { useProjectStore } from '../store/useProjectStore';
 import { activityPatch } from '../store/editing';
 import { Field, fullDate, num, useResolved } from '../components/shared';
+
+function DescriptionField({ value, disabled, onCommit }: { value?: string; disabled: boolean; onCommit: (value: string) => void }) {
+  const [text, setText] = useState(value ?? '');
+  useEffect(() => setText(value ?? ''), [value]);
+  return <label className="field"><span>Description</span><textarea aria-label="Description" rows={5} disabled={disabled}
+    value={text} onChange={e => setText(e.target.value)} onBlur={() => { if (text !== (value ?? '')) onCommit(text); }}
+    onKeyDown={e => { if (e.key === 'Escape') setText(value ?? ''); }} /></label>;
+}
 
 export function PropertyPanel() {
   const m = useResolved(), s = useProjectStore();
@@ -27,7 +36,8 @@ export function PropertyPanel() {
   const overrides = s.document.overrides.filter(o => o.scenarioId === s.activeScenarioId && o.entityId === a.id);
   return <aside className="properties"><div className="inspector-heading"><h2>{a.code}</h2><span>{s.selectedActivityIds.length > 1 ? `${s.selectedActivityIds.length} selected` : a.type}</span></div>
     {immutable && <p className="info-box">Published baseline is read-only. Create or clone a scenario to experiment.</p>}
-    <details open><summary>General</summary>{input('Activity code', 'code')}{input('Activity name', 'name')}{input('Description', 'description')}
+    <details open><summary>General</summary>{input('Activity code', 'code')}{input('Activity name', 'name')}
+      <DescriptionField value={a.description} disabled={immutable} onCommit={value => update('description', value)} />
       {input('Activity type', 'type', 'text', ['TASK', 'MILESTONE', 'SUMMARY'])}
       {input('Status', 'status', 'text', ['NOT_STARTED', 'IN_PROGRESS', 'COMPLETE'])}</details>
     <details open><summary>Scheduling <small>UTC</small></summary><div className="field-pair">{input('Effort (hours)', 'effortHours', 'number')}{input('Duration', 'duration', 'number')}</div>

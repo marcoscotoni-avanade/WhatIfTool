@@ -547,6 +547,12 @@ b,strong {
   width:100%;
   font-size:12px
 }
+.field textarea {
+  width:100%;
+  font-family:inherit;
+  font-size:12px;
+  line-height:1.4
+}
 .field small {
   line-height:1.4
 }
