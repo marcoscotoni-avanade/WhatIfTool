@@ -52,5 +52,5 @@
       "@planner/persistence": ["packages/persistence/src/index.ts"]
     }
   },
-  "include": ["apps/desktop/src", "apps/desktop/vite.config.ts", "packages", "tests", "vitest.config.ts"]
+  "include": ["apps/desktop/src", "apps/desktop/vite.config.ts", "apps/planner-service/src", "apps/mcp-server/src", "packages", "tests", "vitest.config.ts"]
 }

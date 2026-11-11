@@ -26,7 +26,11 @@ missing endpoints and cycles are rejected. Negative lag is supported.
 Calendars have weekly working intervals, holidays and date-specific replacement intervals.
 
 Published baselines snapshot input collections, settings and project scheduling metadata. Historical
-versions cannot be edited or deleted. Scenarios reference a baseline version, optionally inherit a
+snapshot contents cannot be edited. Unused baseline versions can be deleted together with their
+read-only scenario entries; versions referenced by editable scenarios cannot be deleted.
+Optional `archived` metadata hides a baseline from ordinary lists without changing its snapshot
+or existing scenario references. New scenarios default to the latest non-archived baseline.
+Scenarios reference a baseline version, optionally inherit a
 parent scenario and store only field-level overrides (including `$entity` creation/deletion overrides).
 Resolution is baseline + ancestors' overrides + scenario overrides; derived dates are never stored as overrides.
 Baseline promotion creates a new immutable version rather than overwriting history.

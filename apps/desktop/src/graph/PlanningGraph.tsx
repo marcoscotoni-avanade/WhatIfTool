@@ -3,7 +3,7 @@ import { ReactFlow, Background, Controls, MiniMap, Handle, Position, MarkerType,
 import type { Activity, ActivitySchedule, RiskExplanation } from '@planner/domain';
 import { getAncestors } from '@planner/scheduling';
 import { writeOverride } from '@planner/scenarios';
-import { useProjectStore } from '../store/useProjectStore';
+import { connection, persistAction, useProjectStore } from '../store/useProjectStore';
 import { displayDate, num, riskColor, useResolved } from '../components/shared';
 import '@xyflow/react/dist/style.css';
 
@@ -108,7 +108,11 @@ export function PlanningGraph() {
         edges: m.dependencies.map(d => ({ id: d.id, sources: [d.predecessorId], targets: [d.successorId] })),
       });
       if (useProjectStore.getState().revision !== s.revision) throw new Error('Project changed during layout. Run Auto Layout again.');
-      s.commit('Automatic layout', model => {
+      if (connection.connected()) {
+        if (!await persistAction(() => s.updateActivityPatches((result.children ?? []).map(n => ({
+          id: n.id, patch: { graphPosition: { x: n.x ?? 0, y: n.y ?? 0 } },
+        }))))) return;
+      } else s.commit('Automatic layout', model => {
         const scenarioId = s.activeScenarioId;
         // Layout is a normal reversible edit, including scenario-specific positions.
         for (const n of result.children ?? []) {
@@ -154,7 +158,9 @@ export function PlanningGraph() {
         setContextMenu({ graphPosition, x: Math.min(event.clientX, window.innerWidth - 200), y: Math.min(event.clientY, window.innerHeight - 60) });
       }}
       onNodeDragStop={(_, _node, moved) => {
-        s.commit('Move activities', model => {
+        if (connection.connected()) {
+          void persistAction(() => s.updateActivityPatches(moved.map(n => ({ id: n.id, patch: { graphPosition: n.position } }))));
+        } else s.commit('Move activities', model => {
           for (const n of moved) {
             if (s.activeScenarioId) {
               writeOverride(model, s.activeScenarioId, 'activity', n.id, 'graphPosition', n.position);
@@ -167,7 +173,12 @@ export function PlanningGraph() {
       onConnect={connection => { if (connection.source && connection.target) s.connect(connection.source, connection.target); }}
       onNodeClick={() => setContextMenu(undefined)}
       onEdgeClick={(_, edge) => s.select([], edge.id)}
-      onEdgesDelete={deleted => { for (const edge of deleted) { useProjectStore.getState().select([], edge.id); useProjectStore.getState().deleteSelection(); } }}
+      onEdgesDelete={deleted => { void (async () => {
+        for (const edge of deleted) {
+          useProjectStore.getState().select([], edge.id);
+          if (!await persistAction(() => useProjectStore.getState().deleteSelection())) break;
+        }
+      })(); }}
       onPaneClick={() => s.select([])} deleteKeyCode={immutable ? null : ['Backspace', 'Delete']} selectionOnDrag>
       <Background gap={24} size={1} color="#c6d3dd" /><MiniMap pannable zoomable nodeColor={n => (n as ActivityNode).data.color} />
       <Controls showInteractive={false} />

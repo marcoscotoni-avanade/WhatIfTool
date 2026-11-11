@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Team } from '@planner/domain';
-import { useProjectStore } from '../store/useProjectStore';
+import { connection, persistAction, useProjectStore } from '../store/useProjectStore';
+import { useStore } from 'zustand';
 import { Field, Modal, useResolved } from './shared';
 
 export function TeamDialog({ close }: { close: () => void }) {
@@ -22,17 +23,17 @@ export function TeamDialog({ close }: { close: () => void }) {
     </div>)}
     <button onClick={() => setTeam(t => ({ ...t, members: [...t.members, { id: crypto.randomUUID(), name: 'New person', allocationPercent: 100 }] }))}>Add person</button>
     <div className="dialog-actions"><button className="primary" onClick={() => {
-      s.updateEntity('project', m.project.id, { team });
-      if (!useProjectStore.getState().error) close();
+      void persistAction(() => s.updateEntity('project', m.project.id, { team })).then(ok => { if (ok) close(); });
     }}>Apply team</button><button onClick={close}>Cancel</button></div>
   </Modal>;
 }
 
 export function DurationProposalDialog() {
   const pending = useProjectStore(s => s.pendingEdit), finish = useProjectStore(s => s.finishEdit);
+  const c = useStore(connection.state), blocked = c.mode === 'connected' && (c.busy || !!c.error);
   const [selected, setSelected] = useState(() => new Set(pending?.proposals.filter(p => p.duration !== undefined).map(p => p.activityId)));
   if (!pending) return null;
-  return <Modal title="Recalculate duration?" close={() => finish()} wide>
+  return <Modal title="Recalculate duration?" close={() => { if (!blocked) finish(); }} wide>
     <p>Select activities to recalculate. Unselected activities keep their duration and working calendar. The original edit will still be saved.</p>
     {pending.proposals.map(p => <div key={p.activityId}>
       <label className="check"><input type="checkbox" disabled={p.duration === undefined} checked={selected.has(p.activityId)}
@@ -40,7 +41,7 @@ export function DurationProposalDialog() {
         <strong>{p.code}</strong> — {p.previousDuration} {p.durationUnit} → {p.duration === undefined ? p.reason : `${Number(p.duration.toPrecision(12))} ${p.durationUnit} · ${p.allocationPercent}% · ${p.calendarName}`}
       </label>
     </div>)}
-    <div className="dialog-actions"><button className="primary" onClick={() => finish([...selected])}>Apply selected</button>
-      <button onClick={() => finish([])}>Keep durations</button><button onClick={() => finish()}>Cancel entire edit</button></div>
+    <div className="dialog-actions"><button disabled={blocked} className="primary" onClick={() => finish([...selected])}>Apply selected</button>
+      <button disabled={blocked} onClick={() => finish([])}>Keep durations</button><button disabled={blocked} onClick={() => finish()}>Cancel entire edit</button></div>
   </Modal>;
 }

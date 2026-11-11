@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { createProject, iso, type Dependency, type ProjectModel } from '@planner/domain';
 import { importCsv, importJson, toCsv, exportJson } from '@planner/persistence';
+import { resolveScenario } from '@planner/scenarios';
 import { isTauri, invoke } from '@tauri-apps/api/core';
 import type { ProjectSummary } from '@planner/persistence';
-import { useProjectStore } from '../store/useProjectStore';
+import { connection, persistAction, useProjectStore } from '../store/useProjectStore';
 import { toModel } from '../store/document';
 import { download, repository } from '../persistence/local';
 import { Field, Modal, useResolved } from './shared';
@@ -14,11 +15,12 @@ export function NameDialog({ kind, close }: { kind: 'new' | 'scenario' | 'clone'
   return <Modal title={title} close={close}><form onSubmit={e => {
     e.preventDefault();
     if (!name.trim()) return;
-    if (kind === 'new') s.load(createProject(name.trim()));
-    else if (kind === 'baseline') s.baseline(name.trim());
-    else if (kind === 'rename') s.renameScenario(name.trim());
-    else s.newScenario(name.trim(), kind === 'clone');
-    close();
+    void persistAction(() => {
+      if (kind === 'new') return s.load(createProject(name.trim()));
+      if (kind === 'baseline') return s.baseline(name.trim());
+      if (kind === 'rename') return s.renameScenario(name.trim());
+      return s.newScenario(name.trim(), kind === 'clone');
+    }).then(ok => { if (ok) close(); });
   }}><label className="field"><span>Name</span><input aria-label="Name" value={name} onChange={e => setName(e.target.value)} required /></label>
     {kind === 'baseline' && <p>This creates a new immutable version. Existing baselines and scenarios remain unchanged.</p>}
     <button className="primary" type="submit">{kind === 'baseline' ? 'Publish baseline' : 'Create / apply'}</button></form></Modal>;
@@ -48,7 +50,7 @@ export function GlobalSetupDialog({ close, autoSaveEnabled, onAutoSaveChange, ta
       <button aria-label={`Remove tag ${tag}`} disabled={tagsDisabled} onClick={() => setTags(previous => previous.filter(value => value !== tag))}>×</button>
     </span>)}</div>
     {tagsDisabled && <p className="info-box">Published baseline is read-only. Create or select an editable scenario to manage its tag catalog.</p>}
-    <button className="primary" disabled={tagsDisabled} onClick={() => { if (onTagCatalogChange(tags)) close(); }}>Apply tag catalog</button>
+    <button className="primary" disabled={tagsDisabled} onClick={() => { void persistAction(() => onTagCatalogChange(tags)).then(ok => { if (ok) close(); }); }}>Apply tag catalog</button>
   </Modal>;
 }
 export function DependencyDialog({ close }: { close: () => void }) {
@@ -57,8 +59,8 @@ export function DependencyDialog({ close }: { close: () => void }) {
   const [successor, setSuccessor] = useState(s.selectedActivityIds[1] ?? m.activities[1]?.id ?? '');
   const [type, setType] = useState<Dependency['type']>('FS'), [lag, setLag] = useState('0'), [unit, setUnit] = useState<Dependency['lagUnit']>('d');
   return <Modal title="Add dependency" close={close}><form onSubmit={e => {
-    e.preventDefault(); s.connect(predecessor, successor, type, Number(lag), unit);
-    if (!useProjectStore.getState().error) close();
+    e.preventDefault();
+    void persistAction(() => s.connect(predecessor, successor, type, Number(lag), unit)).then(ok => { if (ok) close(); });
   }}>
     <Field label="Predecessor" value={predecessor} options={m.activities.map(a => ({ value: a.id, label: `${a.code} - ${a.name}` }))} onCommit={setPredecessor} />
     <Field label="Successor" value={successor} options={m.activities.map(a => ({ value: a.id, label: `${a.code} - ${a.name}` }))} onCommit={setSuccessor} />
@@ -73,7 +75,7 @@ export function RecentDialog({ close }: { close: () => void }) {
   useEffect(() => { void repository.then(r => r.listProjects()).then(setItems).catch(s.report); }, [s.report]);
   return <Modal title="Recent local projects" close={close}>
     {items?.map(item => <button className="recent-item" key={item.id} onClick={() => {
-      void repository.then(r => r.loadProject(item.id)).then(m => { s.load(m); close(); }).catch(s.report);
+      void repository.then(r => r.loadProject(item.id)).then(async m => { if (await persistAction(() => s.load(m))) close(); }).catch(s.report);
     }}><strong>{item.name}</strong><small>{new Date(item.modifiedAt).toLocaleString()}</small></button>)}
     {!items && <p>Loading local projects...</p>}{items?.length === 0 && <p>No saved projects yet. Save a project to add it here.</p>}
   </Modal>;
@@ -115,7 +117,8 @@ export function ExchangeDialog({ close }: { close: () => void }) {
     if (path) await invoke('write_project', { path, bytes: Array.from(new TextEncoder().encode(text)) });
   };
   const exportFile = async () => {
-    const model = toModel(s.document);
+    if (connection.connected()) await connection.settle();
+    const s = useProjectStore.getState(), model = toModel(s.document), m = resolveScenario(model, s.activeScenarioId);
     if (kind === 'json') await nativeExport(`${m.project.name}.json`, exportJson(model));
     else if (kind === 'activities') await nativeExport('activities.csv', toCsv(m.activities));
     else if (kind === 'dependencies') await nativeExport('dependencies.csv', toCsv(m.dependencies));
@@ -134,10 +137,10 @@ export function ExchangeDialog({ close }: { close: () => void }) {
     else if (kind === 'activities' || kind === 'dependencies') {
       if (s.activeScenarioId) throw new Error('CSV replacement import is only available in the working draft.');
       imported = importCsv(toModel(s.document), new TextDecoder().decode(bytes), kind);
-      if (s.commit('Import CSV', () => imported)) close();
+      if (await persistAction(() => s.commit('Import CSV', () => imported))) close();
       return;
     } else throw new Error('Calculated results cannot be imported as planning inputs.');
-    s.load(imported); useProjectStore.setState({ dirty: true }); close();
+    if (await persistAction(() => s.load(imported))) { if (!connection.connected()) useProjectStore.setState({ dirty: true }); close(); }
   };
   return <Modal title="Import / Export" close={close}>
     <Field label="Data format" value={kind} options={[{ value: 'json', label: 'JSON - complete project' }, { value: 'activities', label: 'CSV - activities' },

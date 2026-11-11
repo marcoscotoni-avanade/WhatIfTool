@@ -61,12 +61,12 @@ export function publishBaseline(m: ProjectModel, name: string, sourceId?: string
 }
 export function createScenario(m: ProjectModel, name: string, parentId?: string): { model: ProjectModel; id: string } {
   let next = structuredClone(m);
-  if (!next.baselines.length) next = publishBaseline(next, 'Baseline v1');
+  if (!parentId && !next.baselines.some(b => !b.archived)) next = publishBaseline(next, 'Baseline v1');
   const parent = parentId ? next.scenarios.find(s => s.id === parentId) : undefined;
   if (parentId && !parent) throw new Error('Parent scenario not found.');
   const id = crypto.randomUUID();
   next.scenarios.push({ id, projectId: m.project.id, name, parentScenarioId: parent?.isBaseline ? undefined : parent?.id,
-    baselineVersionId: parent?.baselineVersionId ?? next.baselines.at(-1)!.id, isBaseline: false, createdAt: new Date().toISOString() });
+    baselineVersionId: parent?.baselineVersionId ?? next.baselines.filter(b => !b.archived).at(-1)!.id, isBaseline: false, createdAt: new Date().toISOString() });
   return { model: next, id };
 }
 export function writeOverride(m: ProjectModel, scenarioId: string, entityType: EntityType, entityId: string, fieldName: string, value: unknown): void {
@@ -82,6 +82,19 @@ export function deleteScenario(m: ProjectModel, id: string): ProjectModel {
   if (m.scenarios.find(s => s.id === id)?.isBaseline) throw new Error('Published baselines cannot be deleted.');
   if (m.scenarios.some(s => s.parentScenarioId === id)) throw new Error('Delete child scenarios first.');
   return { ...m, scenarios: m.scenarios.filter(s => s.id !== id), overrides: m.overrides.filter(o => o.scenarioId !== id) };
+}
+export function manageBaseline(m: ProjectModel, id: string, action: 'delete' | 'archive' | 'restore'): ProjectModel {
+  const baseline = m.baselines.find(b => b.id === id);
+  if (!baseline) throw new Error('Baseline not found.');
+  const references = m.scenarios.filter(s => s.baselineVersionId === id);
+  if (action === 'delete') {
+    if (references.some(s => !s.isBaseline) || m.scenarios.some(s => references.some(r => r.id === s.parentScenarioId)))
+      throw new Error('Baseline is used by scenarios. Archive it instead.');
+    const ids = new Set(references.map(s => s.id));
+    return { ...m, baselines: m.baselines.filter(b => b.id !== id), scenarios: m.scenarios.filter(s => !ids.has(s.id)),
+      overrides: m.overrides.filter(o => !ids.has(o.scenarioId)) };
+  }
+  return { ...m, baselines: m.baselines.map(b => b.id === id ? { ...b, archived: action === 'archive' } : b) };
 }
 export function compareScenarios(base: ProjectSnapshot, scenario: ProjectSnapshot, baseline: CalculationResults, result: CalculationResults, milestoneId?: string): ScenarioComparison {
   const ids = new Set([...base.activities.map(a => a.id), ...scenario.activities.map(a => a.id)]);

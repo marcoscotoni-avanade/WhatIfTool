@@ -44,7 +44,7 @@ export interface ScenarioOverride {
   id: string; scenarioId: string; entityType: EntityType; entityId: string; fieldName: string; value: unknown;
 }
 export interface BaselineVersion {
-  id: string; name: string; createdAt: string; snapshot: ProjectSnapshot;
+  id: string; name: string; createdAt: string; snapshot: ProjectSnapshot; archived?: boolean;
 }
 export interface ProjectSnapshot {
   project: Project; activities: Activity[]; dependencies: Dependency[]; calendars: Calendar[]; settings: RiskSettings;

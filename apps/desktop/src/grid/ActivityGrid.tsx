@@ -3,7 +3,7 @@ import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry, themeQuartz, type ColDef, type GridApi } from 'ag-grid-community';
 import type { Activity } from '@planner/domain';
 import { parseCsv } from '@planner/persistence';
-import { useProjectStore } from '../store/useProjectStore';
+import { persistAction, useProjectStore } from '../store/useProjectStore';
 import { activityPatch } from '../store/editing';
 import { Modal, fullDate, num, useResolved } from '../components/shared';
 import { download } from '../persistence/local';
@@ -81,7 +81,7 @@ export function ActivityGrid() {
   const applyPaste = () => {
     try {
       const records = parseCsv(paste, '\t');
-      if (s.pasteActivities(records)) setPasteOpen(false);
+      void persistAction(() => s.pasteActivities(records)).then(ok => { if (ok) setPasteOpen(false); });
     } catch (error) { s.report(error); }
   };
   return <section className="grid-panel" aria-label="Activity grid"><div className="panel-title"><span>ACTIVITIES <small>{rows.length} rows · double-click to edit</small></span><div>

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createDemo, type ProjectModel } from '@planner/domain';
 import { isTauri } from '@tauri-apps/api/core';
-import { useProjectStore } from './store/useProjectStore';
+import { connection, persistAction, useProjectStore } from './store/useProjectStore';
+import { useStore } from 'zustand';
+import { ConnectionPanel, ConnectionStatus } from './components/ConnectionPanel';
 import { requestCalculation } from './workers/client';
 import { PlanningGraph } from './graph/PlanningGraph';
 import { ActivityGrid } from './grid/ActivityGrid';
@@ -13,11 +15,13 @@ import { Modal, displayDate, num, useResolved } from './components/shared';
 import { DurationProposalDialog, TeamDialog } from './components/TeamDialogs';
 import { openNativeProject, repository, saveProject } from './persistence/local';
 import './styles/app.css';
+import { BaselineManager } from './components/BaselineManager';
 
-type Dialog = 'globalSetup' | 'new' | 'scenario' | 'clone' | 'rename' | 'baseline' | 'dependency' | 'exchange' | 'settings' | 'recent' | 'compare' | 'team';
+type Dialog = 'globalSetup' | 'new' | 'scenario' | 'clone' | 'rename' | 'baseline' | 'baselines' | 'dependency' | 'exchange' | 'settings' | 'recent' | 'compare' | 'team';
 const AUTO_SAVE_KEY = 'project-risk-planner.auto-save';
 export default function App() {
   const s = useProjectStore(), m = useResolved(), [dialog, setDialog] = useState<Dialog>(), [welcome, setWelcome] = useState(true);
+  const connectionState = useStore(connection.state);
   const [pendingAction, setPendingAction] = useState<(() => void) | undefined>(), [saving, setSaving] = useState(false);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(false), [autoSavePulse, setAutoSavePulse] = useState(0);
   const savingRef = useRef(false);
@@ -100,7 +104,8 @@ export default function App() {
   const loadFile = async (file?: File) => {
     if (!file) return;
     const repo = await repository, model: ProjectModel = repo.decode(new Uint8Array(await file.arrayBuffer()));
-    await repo.saveProject(model); s.load(model);
+    if (!connection.connected()) await repo.saveProject(model);
+    await persistAction(() => s.load(model));
   };
   const resizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -115,22 +120,24 @@ export default function App() {
   return <main className="app-shell">
     <header className="app-header"><div className="brand"><span className="brand-mark">P<span>R</span></span><div><b>PROJECT RISK PLANNER</b><small>Schedule digital twin</small></div></div>
       <div className="project-heading"><strong>{m.project.name}{s.dirty ? ' *' : ''}</strong><span>{s.activeScenarioId ? s.document.scenariosById[s.activeScenarioId]?.name : 'Working draft'}</span></div>
-      <div className="file-actions"><button onClick={() => setDialog('globalSetup')}>Setup</button><button onClick={() => guard(() => setDialog('new'))}>New</button><button onClick={open}>Open</button>
+      <div className="file-actions"><ConnectionPanel /><button onClick={() => setDialog('globalSetup')}>Setup</button><button onClick={() => guard(() => setDialog('new'))}>New</button><button onClick={open}>Open</button>
         <button onClick={() => guard(() => setDialog('exchange'))}>Import / Export</button><button disabled={saving} onClick={() => void save(true)}>Save As</button>
         <button className="primary" disabled={saving} onClick={() => void save()}>{saving ? 'Saving...' : 'Save'}</button>
         {autoSavePulse > 0 && <span key={autoSavePulse} className="auto-save-indicator" role="img" aria-label="Auto-save completed" title="Auto-save completed">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 1h10l3 3v11H1V1h1zm2 1v4h7V2H4zm0 7v5h8V9H4zm1 1h6v3H5v-3z" /></svg>
         </span>}</div></header>
-    <nav className="toolbar" aria-label="Planning toolbar">
+    <ConnectionStatus />
+    <nav className="toolbar" aria-label="Planning toolbar" inert={connectionState.mode === 'connected' && (connectionState.busy || !!connectionState.error)}>
       <div><button disabled={immutable} onClick={() => s.addActivity()}>+ Activity</button><button disabled={immutable} onClick={() => s.addActivity(true)}>+ Milestone</button>
         <button disabled={immutable || m.activities.length < 2} onClick={() => setDialog('dependency')}>Add Dependency</button>
         <button disabled={immutable} onClick={() => setDialog('team')}>Team</button><button disabled={immutable || !s.selectedActivityIds.length} onClick={s.duplicateSelection}>Duplicate</button>
         <button disabled={immutable || (!s.selectedActivityIds.length && !s.selectedDependencyId)} onClick={s.deleteSelection}>Delete</button></div>
       <div><button disabled={!s.history.length} title="Ctrl+Z" onClick={s.undo}>Undo</button><button disabled={!s.future.length} title="Ctrl+Y" onClick={s.redo}>Redo</button></div>
       <div className="scenario-tools"><select aria-label="Active scenario" value={s.activeScenarioId ?? ''} onChange={e => s.activateScenario(e.target.value || undefined)}>
-        <option value="">Working draft</option>{Object.values(s.document.scenariosById).map(x => <option key={x.id} value={x.id}>{x.isBaseline ? '[B] ' : ''}{x.name}</option>)}</select>
+        <option value="">Working draft</option>{Object.values(s.document.scenariosById).filter(x => !x.isBaseline || x.id === s.activeScenarioId || !s.document.baselines.find(b => b.id === x.baselineVersionId)?.archived).map(x => <option key={x.id} value={x.id}>{x.isBaseline ? '[B] ' : ''}{x.name}</option>)}</select>
         <button onClick={() => setDialog('scenario')}>New Scenario</button><button disabled={!s.activeScenarioId} onClick={() => setDialog('clone')}>Clone</button>
         <button onClick={() => setDialog('baseline')}>{s.activeScenarioId && !immutable ? 'Promote' : 'Publish Baseline'}</button>
+        <button onClick={() => setDialog('baselines')}>Manage Baselines</button>
         <button disabled={!s.activeScenarioId} onClick={() => { useProjectStore.setState({ comparison: undefined }); setDialog('compare'); requestCalculation(true); }}>Compare</button>
         <button disabled={!s.activeScenarioId || immutable} onClick={() => setDialog('rename')}>Rename</button>
         <button disabled={!s.activeScenarioId || immutable} onClick={s.removeScenario}>Delete Scenario</button></div>
@@ -147,7 +154,7 @@ export default function App() {
       <span><small>MAX EXPOSURE</small><b>{num(Math.max(0, ...Object.values(s.results?.risk ?? {}).map(a => a.totalRisk)))}</b></span>
       <span><small>SCHEDULE CONFLICTS</small><b className={violations.length ? 'negative' : ''}>{violations.length}</b></span>
       <p>Change an activity.<br /><strong>See what happens. Understand why.</strong></p></div>
-    <div className="workspace" ref={workspace} style={{ gridTemplateRows: s.viewMode === 'split' ? `minmax(150px, ${graphPercent}fr) 8px minmax(130px, ${100 - graphPercent}fr)` : 'minmax(0, 1fr)' }}>
+    <div className="workspace" ref={workspace} inert={connectionState.mode === 'connected' && (connectionState.busy || !!connectionState.error)} style={{ gridTemplateRows: s.viewMode === 'split' ? `minmax(150px, ${graphPercent}fr) 8px minmax(130px, ${100 - graphPercent}fr)` : 'minmax(0, 1fr)' }}>
       <div className="upper-workspace" style={{ display: s.viewMode === 'grid' ? 'none' : undefined }}>
         <Explorer openRecent={() => guard(() => setDialog('recent'))} projectSettings={() => setDialog('settings')} />
         <PlanningGraph /><PropertyPanel />
@@ -163,9 +170,10 @@ export default function App() {
     {welcome && <Modal title="Your project. A living model." close={() => setWelcome(false)}>
       <p>Explore dependencies, simulate delays and trace risk to the milestones that matter. Everything stays on this device.</p>
       <div className="welcome-features"><span>01 · Edit the schedule</span><span>02 · Follow the risk</span><span>03 · Protect your milestone</span></div>
-      <button className="primary large" onClick={() => { s.load(createDemo()); useProjectStore.setState({ dirty: true, riskFlow: true }); setWelcome(false); }}>Open Demo Project</button>
+      <button className="primary large" onClick={() => { void persistAction(() => s.load(createDemo())).then(ok => { if (ok) { if (!connection.connected()) useProjectStore.setState({ dirty: true }); useProjectStore.setState({ riskFlow: true }); setWelcome(false); } }); }}>Open Demo Project</button>
       <div className="welcome-actions"><button onClick={() => { setWelcome(false); setDialog('new'); }}>Create New Project</button><button onClick={() => { setWelcome(false); setDialog('recent'); }}>Recent Projects</button><button onClick={() => { setWelcome(false); open(); }}>Open Project</button></div>
     </Modal>}
+    {dialog === 'baselines' && <BaselineManager close={close} />}
     {dialog && ['new', 'scenario', 'clone', 'rename', 'baseline'].includes(dialog) && <NameDialog kind={dialog as 'new' | 'scenario' | 'clone' | 'rename' | 'baseline'} close={close} />}
     {dialog === 'globalSetup' && <GlobalSetupDialog close={close} autoSaveEnabled={autoSaveEnabled} onAutoSaveChange={updateAutoSave}
       tagCatalog={m.project.tagCatalog ?? []} tagsDisabled={immutable} onTagCatalogChange={s.setTagCatalog} />}

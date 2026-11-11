@@ -126,7 +126,7 @@ export function parseProject(value: unknown): ProjectModel {
   unique(m.baselines.map(b => b.id), 'baseline');
   unique(m.overrides.map(o => o.id), 'override');
   for (const b of m.baselines) {
-    if (!b.name || !date(b.createdAt)) fail('Invalid baseline metadata.');
+    if (!b.name || !date(b.createdAt) || (b.archived !== undefined && typeof b.archived !== 'boolean')) fail('Invalid baseline metadata.');
     validateProject(b.snapshot);
     if (b.snapshot.project.id !== m.project.id) fail('Baseline belongs to a different project.');
   }

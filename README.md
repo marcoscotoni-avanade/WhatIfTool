@@ -90,7 +90,32 @@ platforms install Chromium with `npx playwright install chromium` before running
 `npm run build` performs strict TypeScript checking followed by the Vite production build.
 ELK and AG Grid are sizeable local vendor chunks; no CDN is used.
 
+## Local MCP and shared service
+
+The optional connected mode uses a local authoritative service shared by the UI and VS Code.
+Run `npm run service` and connect from the application's service connection controls.
+Run the MCP stdio adapter with `npm run mcp`, or use the workspace MCP configuration.
+See [MCP setup, permissions and limitations](docs/mcp.md).
+
+The service persists working sessions separately from `.pgplan` exports and remains available
+when the UI is closed. Separate UI/agent credentials are generated in the current user's
+`.whatiftool` directory; never commit or share the connection file. Agents may read and edit
+scenarios; changes to the draft, publishing and deletions require explicit user approval.
+Revision checks prevent one client from overwriting newer edits. Existing standalone mode
+remains available; do not use separate standalone copies as simultaneous writers for a
+connected project.
+
+Remote Copilot Studio hosting is a separate deployment stage, not a localhost connection:
+it requires an accessible HTTPS Streamable HTTP endpoint, identity/project authorization,
+and shared remote persistence. This repository's initial integration is local stdio.
+
 ## Features
+
+**Manage Baselines** deletes unused baselines or archives/restores existing ones after typing
+the exact baseline name. Baselines referenced by scenarios can only be archived, not deleted.
+Archived baselines are hidden from ordinary lists while existing scenarios keep working.
+Snapshot contents remain immutable; connected operations are audited and MCP requests require
+UI approval.
 
 - React Flow graph: create, connect, edit edges, drag, multi-select, duplicate/delete,
   pan/zoom, fit view, minimap, automatic ELK layout and saved manual positions. Task cards
@@ -143,7 +168,10 @@ that file too; it does not open a file dialog. The manual **Save** action still 
 confirmation. An explicit file save is the portable backup.
 
 In the browser, **Save** persists to IndexedDB; optional auto-save does the same silently, while
-**Save As** additionally downloads `.pgplan`.
+**Save As** opens a file picker to choose the `.pgplan` filename and location in browsers
+supporting the File System Access API (such as Edge/Chrome on localhost or HTTPS).
+Cancelling leaves the project unsaved. Other browsers download the file using their download
+settings and show an explicit notice; **Save** and auto-save still use IndexedDB.
 **Open** reads a SQLite project file. JSON exports contain the entire document, including all
 baseline versions, settings and overrides. CSV activity/dependency exports use IDs for references;
 all CSV exports use UTF-8 with a BOM so Excel recognizes accented and other Unicode characters.

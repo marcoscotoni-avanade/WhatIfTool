@@ -10,7 +10,7 @@ export function Explorer({ openRecent, projectSettings }: { openRecent: () => vo
     <button className="project-card" onClick={projectSettings}><strong>{m.project.name}</strong><small>{m.activities.length} activities · {m.dependencies.length} dependencies</small><span>Edit project & calendars</span></button>
     <button className="text-button" onClick={openRecent}>Open recent project</button>
     <h3>Scenarios</h3><button className={`explorer-item ${!s.activeScenarioId ? 'active' : ''}`} onClick={() => s.activateScenario()}>Working draft <small>editable</small></button>
-    {Object.values(s.document.scenariosById).map(scenario => <button key={scenario.id} className={`explorer-item ${s.activeScenarioId === scenario.id ? 'active' : ''}`} onClick={() => s.activateScenario(scenario.id)}>
+    {Object.values(s.document.scenariosById).filter(scenario => !scenario.isBaseline || scenario.id === s.activeScenarioId || !s.document.baselines.find(b => b.id === scenario.baselineVersionId)?.archived).map(scenario => <button key={scenario.id} className={`explorer-item ${s.activeScenarioId === scenario.id ? 'active' : ''}`} onClick={() => s.activateScenario(scenario.id)}>
       {scenario.isBaseline ? '[B] ' : '[S] '}{scenario.name}<small>{scenario.isBaseline ? 'published / immutable' : scenario.parentScenarioId ? 'inherited scenario' : 'copy-on-write'}</small>
     </button>)}
     <h3>Milestones</h3>{m.activities.filter(a => a.type === 'MILESTONE').map(a => <button className={`explorer-item ${s.activeMilestoneId === a.id ? 'active' : ''}`} key={a.id}

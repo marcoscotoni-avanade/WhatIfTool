@@ -186,6 +186,7 @@ test('Copy selected exports every data column and preserves empty cells', async 
 });
 
 test('creates activities in both views, layouts, and reopens a downloaded SQLite file', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(window, 'showSaveFilePicker', { value: undefined, configurable: true }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Create New Project', exact: true }).click();
   await page.getByRole('textbox', { name: 'Name', exact: true }).fill('File Round Trip');
@@ -205,7 +206,7 @@ test('creates activities in both views, layouts, and reopens a downloaded SQLite
   expect(download.suggestedFilename()).toBe('File Round Trip.pgplan');
   const path = await download.path();
   expect(path).not.toBeNull();
-  await expect(page.getByText('Project saved locally.', { exact: true })).toBeVisible();
+  await expect(page.getByText('This browser does not support choosing a save location. The project was downloaded using your browser download settings.', { exact: true })).toBeVisible();
   await page.reload();
   const chooserPromise = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Open Project', exact: true }).click();

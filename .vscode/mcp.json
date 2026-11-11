@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "whatiftool-planner": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "node_modules/tsx/dist/cli.mjs",
+        "apps/mcp-server/src/index.ts"
+      ],
+      "cwd": "${workspaceFolder}"
+    }
+  }
+}
