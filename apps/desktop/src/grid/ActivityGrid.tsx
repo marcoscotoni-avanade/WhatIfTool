@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry, themeQuartz, type ColDef, type GridApi } from 'ag-grid-community';
 import type { Activity } from '@planner/domain';
-import { parseCsv, toCsv } from '@planner/persistence';
+import { parseCsv } from '@planner/persistence';
 import { useProjectStore } from '../store/useProjectStore';
-import { activityPatch, editableActivityFields } from '../store/editing';
+import { activityPatch } from '../store/editing';
 import { Modal, fullDate, num, useResolved } from '../components/shared';
 import { download } from '../persistence/local';
+import { activityTemplate } from './activityTemplate';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 type Row = Activity & { calculatedStart?: string; calculatedFinish?: string; totalSlack?: number; risk?: number; predecessors: string; tagsText: string };
@@ -80,25 +81,15 @@ export function ActivityGrid() {
   const applyPaste = () => {
     try {
       const records = parseCsv(paste, '\t');
-      if (!records.length) throw new Error('TSV requires at least one activity row.');
-      const headers = Object.keys(records[0]!);
-      if (!headers.includes('code') || headers.some(h => !editableActivityFields.has(h))) throw new Error('TSV requires code and editable activity field headers.');
-      const patches = records.map(record => {
-        const code = record.code, a = m.activities.find(a => a.code === code);
-        if (!a) throw new Error(`Activity code not found: ${code}`);
-        const patch: Partial<Activity> = {};
-        headers.forEach(f => { if (f !== 'code') Object.assign(patch, activityPatch(f, record[f], a, m.project.projectStart)); });
-        return { id: a.id, patch };
-      });
-      if (applyPatches(patches)) setPasteOpen(false);
+      if (s.pasteActivities(records)) setPasteOpen(false);
     } catch (error) { s.report(error); }
   };
   return <section className="grid-panel" aria-label="Activity grid"><div className="panel-title"><span>ACTIVITIES <small>{rows.length} rows · double-click to edit</small></span><div>
     <button disabled={immutable} onClick={() => s.addActivity()}>+ Add row</button><button disabled={!s.selectedActivityIds.length} onClick={() => void copy()}>Copy selected</button>
     <button disabled={immutable} onClick={() => setPasteOpen(true)}>Paste TSV</button>
-    <button title="Download the editable activity CSV template" onClick={() => {
-      try { download('activity-edit-template.csv', '\uFEFF' + toCsv([], [...editableActivityFields]) + '\r\n', 'text/csv;charset=utf-8'); }
-      catch (error) { s.report(error); }
+    <button title="Download the XLSX template with instructions and an example" onClick={() => {
+      void activityTemplate(m, selectedRows()[0] ?? m.activities[0]).then(bytes =>
+        download('activity-edit-template.xlsx', bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')).catch(s.report);
     }}>Get Schema</button></div></div>
     {s.selectedActivityIds.length > 1 && <div className="bulk-edit"><span>{s.selectedActivityIds.length} selected</span><select aria-label="Bulk field" value={bulkField} onChange={e => setBulkField(e.target.value)}>
       {['duration', 'effortHours', 'intrinsicRisk', 'probabilityOfDelay', 'delayP80', 'plannedStart', 'plannedFinish', 'status'].map(f => <option key={f}>{f}</option>)}</select>
@@ -120,8 +111,8 @@ export function ActivityGrid() {
       }}
     /></div>
     {pasteOpen && <Modal title="Paste tab-separated activity edits" close={() => setPasteOpen(false)}>
-      <p>Include a header row. The code column matches existing activities; other columns are editable field names. All rows validate before committing.</p>
-      <p>Get Schema downloads a CSV template. Open it in Excel, keep code and only the columns you want to change, fill in existing activity codes, then copy the header and data cells here. Blank cells clear/reset values; remove unused columns to leave them unchanged. Use ISO dates and IDs for ownerId/calendarId.</p>
+      <p>Include a header row. Existing codes update activities; new codes create activities and require name. Omitted columns use normal new-activity defaults. Duplicate codes in the paste are rejected. All rows validate before committing, with one Undo for the entire operation.</p>
+      <p>Get Schema downloads an XLSX workbook with instructions and an example. In the Template sheet, keep code and only the columns you want to change, then copy the header and data cells here. Blank cells clear/reset values; remove unused columns to leave them unchanged. Use ISO dates and IDs for ownerId/calendarId.</p>
       <textarea aria-label="TSV edits" rows={10} value={paste} onChange={e => setPaste(e.target.value)} placeholder={'code\tduration\nMIG\t18'} />
       <button className="primary" onClick={applyPaste}>Apply edits</button>
     </Modal>}

@@ -3,6 +3,7 @@ import { createActivity, createProject, parseProject, validateProject, type Acti
 import { createScenario, deleteScenario, publishBaseline, resolveScenario, validateDocument, writeOverride } from '@planner/scenarios';
 import { command, normalize, toModel, type DocumentCommand, type DocumentState } from './document';
 import { proposeDuration, type DurationProposal } from './durationProposal';
+import { activityPatch, editableActivityFields } from './editing';
 
 interface PendingEdit { name: string; model: ProjectModel; revision: number; scenarioId?: string; proposals: DurationProposal[] }
 
@@ -17,6 +18,7 @@ interface Store {
   requestEdit(name: string, mutate: (m: ProjectModel) => ProjectModel): boolean;
   finishEdit(selectedIds?: string[]): void;
   updateActivityPatches(patches: { id: string; patch: Partial<Activity> }[]): boolean;
+  pasteActivities(records: Record<string, string>[]): boolean;
   load(m: ProjectModel, path?: string): void; saveCompleted(revision: number, path?: string, notify?: boolean): void;
   updateEntity(type: EntityType, id: string, patch: Record<string, unknown>): void; setTagCatalog(tags: string[]): boolean;
   updateActivities(ids: string[], patch: Partial<Activity>): void;
@@ -186,6 +188,43 @@ export const useProjectStore = create<Store>((set, get) => ({
         }
       }
       return m;
+    });
+  },
+  pasteActivities: records => {
+    const state = get();
+    return state.requestEdit('Paste activities', model => {
+      if (!records.length) throw new Error('TSV requires at least one activity row.');
+      const resolved = resolveScenario(model, state.activeScenarioId);
+      const seen = new Set<string>();
+      let created = 0;
+      for (const record of records) {
+        const headers = Object.keys(record);
+        if (!headers.includes('code') || headers.some(field => !editableActivityFields.has(field)))
+          throw new Error('TSV requires code and editable activity field headers.');
+        const code = record.code;
+        if (!code?.trim()) throw new Error('Activity code is required.');
+        if (seen.has(code)) throw new Error(`Duplicate activity code in TSV: ${code}`);
+        seen.add(code);
+        const matches = resolved.activities.filter(activity => activity.code === code);
+        if (matches.length > 1) throw new Error(`Activity code is ambiguous: ${code}`);
+        const existing = matches[0];
+        if (!existing && !record.name?.trim()) throw new Error(`New activity ${code} requires name.`);
+        const activity = existing ?? createActivity(resolved.project.id, resolved.activities.length + ++created);
+        const patch: Partial<Activity> = {};
+        for (const field of headers) {
+          if (field !== 'code') Object.assign(patch, activityPatch(field, record[field], activity, resolved.project.projectStart));
+        }
+        if (existing) {
+          if (state.activeScenarioId) {
+            for (const [field, value] of Object.entries(patch)) writeOverride(model, state.activeScenarioId, 'activity', activity.id, field, value);
+          } else Object.assign(model.activities.find(a => a.id === activity.id)!, patch);
+        } else {
+          Object.assign(activity, patch, { code });
+          if (state.activeScenarioId) writeOverride(model, state.activeScenarioId, 'activity', activity.id, '$entity', activity);
+          else model.activities.push(activity);
+        }
+      }
+      return model;
     });
   },
   addActivity: (milestone = false, graphPosition) => {

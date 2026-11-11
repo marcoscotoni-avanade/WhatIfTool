@@ -146,6 +146,7 @@ In the browser, **Save** persists to IndexedDB; optional auto-save does the same
 **Save As** additionally downloads `.pgplan`.
 **Open** reads a SQLite project file. JSON exports contain the entire document, including all
 baseline versions, settings and overrides. CSV activity/dependency exports use IDs for references;
+all CSV exports use UTF-8 with a BOM so Excel recognizes accented and other Unicode characters.
 CSV results are read-only calculated output. CSV import replaces one working-draft collection,
 rejects invalid graphs atomically and is undoable. Export/import activities before dependencies
 when exchanging a complete CSV project with preserved IDs.
@@ -231,13 +232,20 @@ to generate a compatible JSON project for manual review and import.
   outside the horizontal viewport), with field-name headers, raw values and empty cells preserved.
   Tabs, line breaks and quotes inside values use quoted TSV escaping. Paste TSV accepts only
   editable field headers; remove calculated/read-only columns before using an export for edits.
-  Get Schema (next to Paste TSV) downloads `activity-edit-template.csv`, an empty UTF-8 CSV
-  with all accepted editable field headers. Open it in Excel, keep `code` and the columns
-  to update, enter existing activity codes, then copy the header and data cells into Paste TSV.
+  Get Schema (next to Paste TSV) downloads `activity-edit-template.xlsx`. The first sheet,
+  Istruzioni, documents each accepted column, allowed values, blank-cell behavior and current
+  calendar/owner IDs. The second sheet, Template, contains all editable headers and one example
+  row from the first selected activity (or first project activity; an illustrative row if empty).
+  Cells use text formatting to preserve ISO dates and IDs. Open it in Excel, keep `code` and the columns
+  to update, then copy the header and data cells into Paste TSV.
   Remove unused columns: blank cells clear/reset values rather than leaving them unchanged.
   Use ISO-8601 dates, `true`/`false` for elapsedMode and internal IDs for ownerId/calendarId.
   Paste TSV preserves trailing empty cells and quoted multiline spreadsheet values; it updates
-  existing activities only, not new rows.
+  existing activities by `code` and creates new ones for unknown codes (`name` required).
+  Omitted columns on new rows use normal new-activity defaults; explicit blank cells still
+  clear/reset values or fail validation for required fields. Duplicate codes in a paste and
+  ambiguous existing codes are rejected. Mixed inserts/updates validate atomically, support
+  scenarios and one-step Undo/Redo, and retain duration proposals for existing activity edits.
 - Automatic layout runs asynchronously on demand; the heavy scheduling/risk algorithms are in a
   worker. No guarantee of instantaneous layout for huge networks is claimed.
 - Results are saved with engine versions for provenance but are recalculated when opening a project.

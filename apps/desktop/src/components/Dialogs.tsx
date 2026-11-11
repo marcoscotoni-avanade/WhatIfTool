@@ -109,7 +109,7 @@ export function ExchangeDialog({ close }: { close: () => void }) {
   const s = useProjectStore(), m = useResolved(), [kind, setKind] = useState('json');
   const [filename, setFilename] = useState(''), [bytes, setBytes] = useState<Uint8Array>();
   const nativeExport = async (name: string, text: string) => {
-    if (!isTauri()) { download(name, text, 'text/plain'); return; }
+    if (!isTauri()) { download(name, text, name.endsWith('.csv') ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8'); return; }
     const { save } = await import('@tauri-apps/plugin-dialog');
     const path = await save({ defaultPath: name });
     if (path) await invoke('write_project', { path, bytes: Array.from(new TextEncoder().encode(text)) });

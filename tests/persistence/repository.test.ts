@@ -5,6 +5,21 @@ import { createScenario, writeOverride } from '@planner/scenarios';
 import { importCsv, importJson, parseCsv, toCsv, exportJson } from '../../packages/persistence/src/exchange';
 import { resolve } from 'node:path';
 
+it('exports UTF-8 CSV with a BOM and preserves Unicode through reimport', () => {
+  const m = createDemo();
+  m.activities[0]!.name = 'Qualit\u00e0, caff\u00e8 \u2013 \u201cverifica\u201d \u20ac';
+  m.activities[0]!.description = '\u00c8 gi\u00e0 pronto\n\u6d4b\u8bd5';
+  const csv = toCsv(m.activities);
+  const bytes = new TextEncoder().encode(csv);
+  expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+  for (const text of [csv, new TextDecoder().decode(bytes)]) {
+    expect(importCsv(m, text, 'activities').activities[0]).toMatchObject({
+      name: m.activities[0]!.name, description: m.activities[0]!.description,
+    });
+  }
+  expect(parseCsv(toCsv([{ code: 'A', name: '\u00e0' }]))).toEqual([{ code: 'A', name: '\u00e0' }]);
+});
+
 it('parses spreadsheet TSV with quoted multiline values and trailing empty cells', () => {
   expect(parseCsv('code\tdescription\townerId\r\nMIG\t"Review ""SCM""\tsetup\r\nSignoff"\t\r\n', '\t')).toEqual([
     { code: 'MIG', description: 'Review "SCM"\tsetup\r\nSignoff', ownerId: '' },

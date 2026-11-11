@@ -8,6 +8,7 @@ export function importJson(text: string): ProjectModel {
   return m;
 }
 export function parseCsv(text: string, delimiter: ',' | '\t' = ','): Record<string, string>[] {
+  text = text.replace(/^\uFEFF/, '');
   const format = delimiter === '\t' ? 'TSV' : 'CSV';
   const rows: string[][] = [], row: string[] = [];
   let cell = '', quoted = false;
@@ -33,7 +34,7 @@ export function parseCsv(text: string, delimiter: ',' | '\t' = ','): Record<stri
 export function toCsv(rows: object[], headers?: string[]): string {
   const keys = headers ?? [...new Set(rows.flatMap(r => Object.keys(r)))];
   const quote = (v: unknown) => `"${String(typeof v === 'object' && v !== null ? JSON.stringify(v) : v ?? '').replaceAll('"', '""')}"`;
-  return [keys.map(quote).join(','), ...rows.map(row => keys.map(k => quote(Reflect.get(row, k))).join(','))].join('\r\n');
+  return '\uFEFF' + [keys.map(quote).join(','), ...rows.map(row => keys.map(k => quote(Reflect.get(row, k))).join(','))].join('\r\n');
 }
 export function importCsv(m: ProjectModel, text: string, kind: 'activities' | 'dependencies'): ProjectModel {
   const next = structuredClone(m);

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
+import ExcelJS from 'exceljs';
 
 test('demo -> risk flow -> milestone contributions -> baseline -> what-if -> SQLite reopen', async ({ page }) => {
   const errors: string[] = [];
@@ -81,22 +81,42 @@ test('grid edits synchronize selection, commands undo, cycles reject, dependenci
   await expect(page.locator('.react-flow__node[data-id="activity-2"]')).toContainText('14d');
 });
 
-test('Get Schema downloads an editable CSV template for spreadsheet paste', async ({ page }) => {
+test('Get Schema downloads an XLSX template with instructions and an example for spreadsheet paste', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Open Demo Project', exact: true }).click();
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Get Schema', exact: true }).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe('activity-edit-template.csv');
+  expect(download.suggestedFilename()).toBe('activity-edit-template.xlsx');
   const path = await download.path();
-  if (!path) throw new Error('CSV template download is missing.');
-  const csv = await readFile(path, 'utf8');
-  const fields = csv.replace(/^\uFEFF/, '').trim().split(',').map(field => JSON.parse(field) as string);
+  if (!path) throw new Error('XLSX template download is missing.');
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(path);
+  expect(workbook.worksheets.map(sheet => sheet.name)).toEqual(['Istruzioni', 'Template']);
+  const instructions = workbook.getWorksheet('Istruzioni')!;
+  const template = workbook.getWorksheet('Template')!;
+  const fields = Array.from({ length: template.columnCount }, (_, i) => String(template.getRow(1).getCell(i + 1).value));
   expect(fields).toEqual([
     'code', 'name', 'description', 'type', 'effortHours', 'duration', 'durationUnit', 'elapsedMode', 'scheduleMode',
     'plannedStart', 'plannedFinish', 'actualStart', 'actualFinish', 'constraintType', 'constraintDate', 'targetDate',
     'intrinsicRisk', 'probabilityOfDelay', 'delayP80', 'calendarId', 'ownerId', 'status',
   ]);
+  expect(template.rowCount).toBe(2);
+  for (const field of fields) {
+    const row = instructions.getRows(10, fields.length)?.find(row => row.getCell(1).value === field);
+    expect(row?.getCell(2).value).toBeTruthy();
+  }
+  expect(instructions.getRow(10 + fields.indexOf('type')).getCell(2).value).toBe('TASK | MILESTONE | SUMMARY');
+  expect(template.getCell('A2').value).toBeTruthy();
+  const sampleTsv = [1, 2].map(row => fields.map((_, i) => {
+    const value = String(template.getRow(row).getCell(i + 1).value ?? '');
+    return /[\t\r\n"]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+  }).join('\t')).join('\n');
+  await page.getByRole('button', { name: 'Paste TSV', exact: true }).click();
+  await page.getByRole('textbox', { name: 'TSV edits', exact: true }).fill(sampleTsv);
+  await page.getByRole('button', { name: 'Apply edits', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('alert')).toHaveCount(0);
   await page.locator('.react-flow__node[data-id="activity-2"]').click();
   const originalName = await page.getByRole('textbox', { name: 'Activity name', exact: true }).inputValue();
   await page.getByRole('button', { name: 'Paste TSV', exact: true }).click();
@@ -108,6 +128,28 @@ test('Get Schema downloads an editable CSV template for spreadsheet paste', asyn
   await expect(page.getByRole('textbox', { name: 'Description', exact: true })).toHaveValue('Review "SCM"\nSignoff');
   await expect(page.getByRole('textbox', { name: 'Activity name', exact: true })).toHaveValue(originalName);
   await expect(page.getByRole('combobox', { name: 'Owner', exact: true })).toHaveValue('');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('Paste TSV inserts new activities alongside updates and undoes the entire batch', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Create New Project', exact: true }).click();
+  await page.getByRole('button', { name: 'Create / apply', exact: true }).click();
+  await page.getByRole('button', { name: 'Paste TSV', exact: true }).click();
+  await page.getByRole('textbox', { name: 'TSV edits', exact: true }).fill('code\tname\nNEW-1\tFirst task');
+  await page.getByRole('button', { name: 'Apply edits', exact: true }).click();
+  await expect(page.locator('.react-flow__node')).toHaveCount(1);
+  await expect(page.locator('.ag-center-cols-container .ag-row')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Paste TSV', exact: true }).click();
+  await page.getByRole('textbox', { name: 'TSV edits', exact: true }).fill('code\tname\nNEW-1\tUpdated task\nNEW-2\tSecond task');
+  await page.getByRole('button', { name: 'Apply edits', exact: true }).click();
+  await expect(page.locator('.react-flow__node')).toHaveCount(2);
+  await expect(page.locator('.ag-pinned-left-cols-container [col-id="name"]')).toHaveText(['Updated task', 'Second task']);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.locator('.react-flow__node')).toHaveCount(1);
+  await expect(page.locator('.ag-pinned-left-cols-container [col-id="name"]')).toHaveText(['First task']);
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await expect(page.locator('.react-flow__node')).toHaveCount(2);
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
