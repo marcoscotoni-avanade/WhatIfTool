@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { AllCommunityModule, ModuleRegistry, themeQuartz, type ColDef, type GridApi } from 'ag-grid-community';
 import type { Activity } from '@planner/domain';
+import { parseCsv, toCsv } from '@planner/persistence';
 import { useProjectStore } from '../store/useProjectStore';
 import { activityPatch, editableActivityFields } from '../store/editing';
 import { Modal, fullDate, num, useResolved } from '../components/shared';
+import { download } from '../persistence/local';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 type Row = Activity & { calculatedStart?: string; calculatedFinish?: string; totalSlack?: number; risk?: number; predecessors: string; tagsText: string };
@@ -49,8 +51,20 @@ export function ActivityGrid() {
   const selectedRows = () => rows.filter(r => s.selectedActivityIds.includes(r.id));
   const copy = async () => {
     try {
-      const fields = ['code', 'name', 'duration', 'effortHours', 'plannedStart', 'plannedFinish'];
-      await navigator.clipboard.writeText([fields.join('\t'), ...selectedRows().map(r => fields.map(f => String(Reflect.get(r, f) ?? '')).join('\t'))].join('\n'));
+      const grid = api.current;
+      if (!grid) throw new Error('Activity grid is not ready to copy.');
+      const dataColumns = grid.getAllDisplayedColumns().filter(column => column.getColDef().field);
+      const encode = (value: unknown) => {
+        const text = String(value ?? '');
+        return /[\t\r\n"]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+      };
+      const headers = dataColumns.map(column => encode(column.getColDef().field));
+      const records = selectedRows().map(row => {
+        const node = grid.getRowNode(row.id);
+        if (!node) throw new Error(`Activity row not found: ${row.code}`);
+        return dataColumns.map(column => encode(grid.getCellValue({ rowNode: node, colKey: column, useFormatter: false }))).join('\t');
+      });
+      await navigator.clipboard.writeText([headers.join('\t'), ...records].join('\n'));
       useProjectStore.setState({ notice: 'Selected rows copied as tab-separated values.' });
     } catch (error) { s.report(error); }
   };
@@ -65,14 +79,15 @@ export function ActivityGrid() {
   };
   const applyPaste = () => {
     try {
-      const lines = paste.replaceAll('\r', '').trim().split('\n').map(l => l.split('\t')), headers = lines.shift()!;
+      const records = parseCsv(paste, '\t');
+      if (!records.length) throw new Error('TSV requires at least one activity row.');
+      const headers = Object.keys(records[0]!);
       if (!headers.includes('code') || headers.some(h => !editableActivityFields.has(h))) throw new Error('TSV requires code and editable activity field headers.');
-      const patches = lines.map(cells => {
-        if (cells.length !== headers.length) throw new Error('TSV row length does not match headers.');
-        const code = cells[headers.indexOf('code')], a = m.activities.find(a => a.code === code);
+      const patches = records.map(record => {
+        const code = record.code, a = m.activities.find(a => a.code === code);
         if (!a) throw new Error(`Activity code not found: ${code}`);
         const patch: Partial<Activity> = {};
-        headers.forEach((f, i) => { if (f !== 'code') Object.assign(patch, activityPatch(f, cells[i], a, m.project.projectStart)); });
+        headers.forEach(f => { if (f !== 'code') Object.assign(patch, activityPatch(f, record[f], a, m.project.projectStart)); });
         return { id: a.id, patch };
       });
       if (applyPatches(patches)) setPasteOpen(false);
@@ -80,7 +95,11 @@ export function ActivityGrid() {
   };
   return <section className="grid-panel" aria-label="Activity grid"><div className="panel-title"><span>ACTIVITIES <small>{rows.length} rows · double-click to edit</small></span><div>
     <button disabled={immutable} onClick={() => s.addActivity()}>+ Add row</button><button disabled={!s.selectedActivityIds.length} onClick={() => void copy()}>Copy selected</button>
-    <button disabled={immutable} onClick={() => setPasteOpen(true)}>Paste TSV</button></div></div>
+    <button disabled={immutable} onClick={() => setPasteOpen(true)}>Paste TSV</button>
+    <button title="Download the editable activity CSV template" onClick={() => {
+      try { download('activity-edit-template.csv', '\uFEFF' + toCsv([], [...editableActivityFields]) + '\r\n', 'text/csv;charset=utf-8'); }
+      catch (error) { s.report(error); }
+    }}>Get Schema</button></div></div>
     {s.selectedActivityIds.length > 1 && <div className="bulk-edit"><span>{s.selectedActivityIds.length} selected</span><select aria-label="Bulk field" value={bulkField} onChange={e => setBulkField(e.target.value)}>
       {['duration', 'effortHours', 'intrinsicRisk', 'probabilityOfDelay', 'delayP80', 'plannedStart', 'plannedFinish', 'status'].map(f => <option key={f}>{f}</option>)}</select>
       <input aria-label="Bulk value" value={bulkValue} onChange={e => setBulkValue(e.target.value)} /><button disabled={immutable} onClick={applyBulk}>Apply to selected</button></div>}
@@ -102,6 +121,7 @@ export function ActivityGrid() {
     /></div>
     {pasteOpen && <Modal title="Paste tab-separated activity edits" close={() => setPasteOpen(false)}>
       <p>Include a header row. The code column matches existing activities; other columns are editable field names. All rows validate before committing.</p>
+      <p>Get Schema downloads a CSV template. Open it in Excel, keep code and only the columns you want to change, fill in existing activity codes, then copy the header and data cells here. Blank cells clear/reset values; remove unused columns to leave them unchanged. Use ISO dates and IDs for ownerId/calendarId.</p>
       <textarea aria-label="TSV edits" rows={10} value={paste} onChange={e => setPaste(e.target.value)} placeholder={'code\tduration\nMIG\t18'} />
       <button className="primary" onClick={applyPaste}>Apply edits</button>
     </Modal>}

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 test('demo -> risk flow -> milestone contributions -> baseline -> what-if -> SQLite reopen', async ({ page }) => {
   const errors: string[] = [];
@@ -78,6 +79,68 @@ test('grid edits synchronize selection, commands undo, cycles reject, dependenci
   await page.getByRole('button', { name: 'Apply edits', exact: true }).click();
   await page.getByRole('button', { name: 'Fit View', exact: true }).first().click();
   await expect(page.locator('.react-flow__node[data-id="activity-2"]')).toContainText('14d');
+});
+
+test('Get Schema downloads an editable CSV template for spreadsheet paste', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open Demo Project', exact: true }).click();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Get Schema', exact: true }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('activity-edit-template.csv');
+  const path = await download.path();
+  if (!path) throw new Error('CSV template download is missing.');
+  const csv = await readFile(path, 'utf8');
+  const fields = csv.replace(/^\uFEFF/, '').trim().split(',').map(field => JSON.parse(field) as string);
+  expect(fields).toEqual([
+    'code', 'name', 'description', 'type', 'effortHours', 'duration', 'durationUnit', 'elapsedMode', 'scheduleMode',
+    'plannedStart', 'plannedFinish', 'actualStart', 'actualFinish', 'constraintType', 'constraintDate', 'targetDate',
+    'intrinsicRisk', 'probabilityOfDelay', 'delayP80', 'calendarId', 'ownerId', 'status',
+  ]);
+  await page.locator('.react-flow__node[data-id="activity-2"]').click();
+  const originalName = await page.getByRole('textbox', { name: 'Activity name', exact: true }).inputValue();
+  await page.getByRole('button', { name: 'Paste TSV', exact: true }).click();
+  await page.getByRole('textbox', { name: 'TSV edits', exact: true }).fill(
+    'code\tdescription\townerId\r\nMIG\t"Review ""SCM""\nSignoff"\t',
+  );
+  await page.getByRole('button', { name: 'Apply edits', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'Description', exact: true })).toHaveValue('Review "SCM"\nSignoff');
+  await expect(page.getByRole('textbox', { name: 'Activity name', exact: true })).toHaveValue(originalName);
+  await expect(page.getByRole('combobox', { name: 'Owner', exact: true })).toHaveValue('');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('Copy selected exports every data column and preserves empty cells', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Create New Project', exact: true }).click();
+  await page.getByRole('button', { name: 'Create / apply', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Copy selected', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '+ Activity', exact: true }).click();
+  await page.getByRole('button', { name: '+ Add row', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Column with Header Selection', exact: true }).check();
+  await page.getByRole('button', { name: 'Copy selected', exact: true }).click();
+  await expect(page.getByText('Selected rows copied as tab-separated values.', { exact: true })).toBeVisible();
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  const [headers, ...records] = copied.split(/\r?\n/).map(line => line.split('\t'));
+  if (!headers) throw new Error('Clipboard export is missing headers.');
+  expect(headers).toEqual([
+    'code', 'name', 'type', 'effortHours', 'duration', 'ownerId', 'tagsText', 'durationUnit',
+    'scheduleMode', 'plannedStart', 'plannedFinish', 'calculatedStart', 'calculatedFinish',
+    'predecessors', 'constraintType', 'constraintDate', 'totalSlack', 'risk', 'status',
+  ]);
+  expect(records).toHaveLength(2);
+  for (const record of records) {
+    expect(record).toHaveLength(headers.length);
+    for (const field of ['ownerId', 'tagsText', 'plannedStart', 'plannedFinish', 'predecessors', 'constraintDate']) {
+      expect(record[headers.indexOf(field)]).toBe('');
+    }
+    expect(record[headers.indexOf('effortHours')]).toBe('0');
+    expect(record[headers.indexOf('type')]).toBe('TASK');
+    expect(record[headers.indexOf('status')]).toBe('NOT_STARTED');
+  }
+  expect(records[0]?.[0]).not.toBe(records[1]?.[0]);
 });
 
 test('creates activities in both views, layouts, and reopens a downloaded SQLite file', async ({ page }) => {

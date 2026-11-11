@@ -2,8 +2,18 @@ import { expect, it } from 'vitest';
 import { createDemo, type ProjectModel } from '@planner/domain';
 import { SqliteProjectRepository, type BinaryStore } from '@planner/persistence';
 import { createScenario, writeOverride } from '@planner/scenarios';
-import { importCsv, importJson, toCsv, exportJson } from '../../packages/persistence/src/exchange';
+import { importCsv, importJson, parseCsv, toCsv, exportJson } from '../../packages/persistence/src/exchange';
 import { resolve } from 'node:path';
+
+it('parses spreadsheet TSV with quoted multiline values and trailing empty cells', () => {
+  expect(parseCsv('code\tdescription\townerId\r\nMIG\t"Review ""SCM""\tsetup\r\nSignoff"\t\r\n', '\t')).toEqual([
+    { code: 'MIG', description: 'Review "SCM"\tsetup\r\nSignoff', ownerId: '' },
+  ]);
+  expect(parseCsv('code\townerId\nMIG\t', '\t')).toEqual([{ code: 'MIG', ownerId: '' }]);
+  expect(() => parseCsv('code\tcode\nMIG\tMIG', '\t')).toThrow(/headers/);
+  expect(() => parseCsv('code\tname\nMIG', '\t')).toThrow(/columns/);
+  expect(() => parseCsv('code\tname\nMIG\t"Unclosed', '\t')).toThrow(/Unclosed quote/);
+});
 
 it('round trips a real SQLite file with baselines, overrides, graph positions, settings and exceptions', async () => {
   const map = new Map<string, Uint8Array>();

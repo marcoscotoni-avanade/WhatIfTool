@@ -7,25 +7,26 @@ export function importJson(text: string): ProjectModel {
   validateDocument(m);
   return m;
 }
-export function parseCsv(text: string): Record<string, string>[] {
+export function parseCsv(text: string, delimiter: ',' | '\t' = ','): Record<string, string>[] {
+  const format = delimiter === '\t' ? 'TSV' : 'CSV';
   const rows: string[][] = [], row: string[] = [];
   let cell = '', quoted = false;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]!;
     if (ch === '"') {
       if (quoted && text[i + 1] === '"') { cell += '"'; i++; } else quoted = !quoted;
-    } else if (ch === ',' && !quoted) { row.push(cell); cell = ''; }
+    } else if (ch === delimiter && !quoted) { row.push(cell); cell = ''; }
     else if ((ch === '\n' || ch === '\r') && !quoted) {
       if (ch === '\r' && text[i + 1] === '\n') i++;
       row.push(cell); if (row.some(Boolean)) rows.push([...row]); row.length = 0; cell = '';
     } else cell += ch;
   }
-  if (quoted) throw new Error('Unclosed quote in CSV.');
+  if (quoted) throw new Error(`Unclosed quote in ${format}.`);
   row.push(cell); if (row.some(Boolean)) rows.push(row);
   const headers = rows.shift();
-  if (!headers?.length || new Set(headers).size !== headers.length) throw new Error('Invalid CSV headers.');
+  if (!headers?.length || new Set(headers).size !== headers.length) throw new Error(`Invalid ${format} headers.`);
   return rows.map((r, i) => {
-    if (r.length !== headers.length) throw new Error(`CSV row ${i + 2} has an incorrect number of columns.`);
+    if (r.length !== headers.length) throw new Error(`${format} row ${i + 2} has an incorrect number of columns.`);
     return Object.fromEntries(headers.map((h, j) => [h.replace(/^\uFEFF/, ''), r[j]!]));
   });
 }

@@ -227,6 +227,17 @@ to generate a compatible JSON project for manual review and import.
 - Native atomic saves export the complete small SQLite database. This is not a multi-user database.
 - Community-grid copy/paste is provided through explicit Copy selected / Paste TSV controls,
   not AG Grid Enterprise's Excel-style range clipboard.
+  Copy selected exports all displayed data columns in their current order (including columns
+  outside the horizontal viewport), with field-name headers, raw values and empty cells preserved.
+  Tabs, line breaks and quotes inside values use quoted TSV escaping. Paste TSV accepts only
+  editable field headers; remove calculated/read-only columns before using an export for edits.
+  Get Schema (next to Paste TSV) downloads `activity-edit-template.csv`, an empty UTF-8 CSV
+  with all accepted editable field headers. Open it in Excel, keep `code` and the columns
+  to update, enter existing activity codes, then copy the header and data cells into Paste TSV.
+  Remove unused columns: blank cells clear/reset values rather than leaving them unchanged.
+  Use ISO-8601 dates, `true`/`false` for elapsedMode and internal IDs for ownerId/calendarId.
+  Paste TSV preserves trailing empty cells and quoted multiline spreadsheet values; it updates
+  existing activities only, not new rows.
 - Automatic layout runs asynchronously on demand; the heavy scheduling/risk algorithms are in a
   worker. No guarantee of instantaneous layout for huge networks is claimed.
 - Results are saved with engine versions for provenance but are recalculated when opening a project.
