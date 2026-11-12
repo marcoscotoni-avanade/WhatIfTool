@@ -982,6 +982,40 @@ b,strong {
   display:flex;
   gap:8px
 }
+.approval-modal {
+  display:flex;
+  flex-direction:column;
+  overflow:hidden
+}
+.approval-modal>header {
+  flex-shrink:0
+}
+.approval-content {
+  min-height:0;
+  overflow:auto;
+  overflow-wrap:anywhere
+}
+.approval-content details {
+  border:1px solid #d5e1e8;
+  border-radius:4px;
+  margin:8px 0;
+  padding:8px
+}
+.approval-content summary {
+  cursor:pointer
+}
+.approval-content pre {
+  max-height:140px;
+  overflow:auto;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere
+}
+.approval-actions {
+  flex-shrink:0;
+  border-top:1px solid #e0e8ee;
+  padding-top:16px;
+  margin-top:12px
+}
 .modal-error {
   background:#fff0ee;
   border:1px solid #ebc9c7;

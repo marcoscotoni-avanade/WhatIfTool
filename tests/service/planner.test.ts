@@ -93,18 +93,24 @@ it('persists commands before acknowledgement and rejects stale revisions and reu
   expect(invalidHistory.data.items).toMatchObject([{ outcome: 'failed:INVALID_INPUT' }]);
   expect(JSON.stringify(invalidHistory.data)).not.toContain('must-not-be-recorded');
 });
-it('requires approval for agent draft writes and prevents agent self approval', async () => {
+it('applies agent draft changes and deletions directly with revision checks and audit', async () => {
   const { route } = await register();
-  const requested = await call(route + '/commands', { expectedRevision: 0, operationId: randomUUID(),
-    action: 'pasteActivities', args: [[{ code: 'AGENT', name: 'Approved task' }]] }, 'agent');
-  expect(requested.data.status).toBe('approval_required');
-  expect((await call(route)).data.model.activities.some((a: { code: string }) => a.code === 'AGENT')).toBe(false);
-  const decision = route + `/operations/${requested.data.operation.id}/decision`;
-  expect((await call(decision, { approve: true }, 'agent')).status).toBe(403);
-  const approved = await call(decision, { approve: true });
-  expect(approved.data.operation.status).toBe('approved');
-  expect(approved.data.model.activities.some((a: { code: string }) => a.code === 'AGENT')).toBe(true);
-  expect((await call(decision, { approve: true })).status).toBe(409);
+  const command = { expectedRevision: 0, operationId: randomUUID(),
+    action: 'applyChanges', args: [{ activities: [{ patch: { code: 'AGENT', name: 'Agent task' } }] }] };
+  const preview = await call(route + '/preview', command, 'agent');
+  expect(preview.data.requiresApproval).toBe(false);
+  const applied = await call(route + '/commands', command, 'agent');
+  expect(applied.data.revision).toBe(1);
+  const activity = applied.data.model.activities.find((a: { code: string }) => a.code === 'AGENT');
+  expect(activity.name).toBe('Agent task');
+  expect((await call(route + '/commands', command, 'agent')).data.replayed).toBe(true);
+  expect((await call(route + '/commands', { ...command, operationId: randomUUID() }, 'agent')).status).toBe(409);
+  const deleted = await call(route + '/commands', { expectedRevision: 1, operationId: randomUUID(),
+    action: 'deleteSelection', args: [], selection: { activityIds: [activity.id] } }, 'agent');
+  expect(deleted.data.revision).toBe(2);
+  expect(deleted.data.model.activities.some((a: { id: string }) => a.id === activity.id)).toBe(false);
+  const history = await call(route + '/history/query', { limit: 10, offset: 0, actor: 'agent', outcome: 'committed' }, 'agent');
+  expect(history.data.items.map((item: { action: string }) => item.action)).toEqual(['deleteSelection', 'applyChanges']);
 });
 it('requires approval to delete unused baselines, preserving immutable snapshot checks', async () => {
   const model = publishBaseline(createDemo(), 'Unused');
@@ -112,6 +118,7 @@ it('requires approval to delete unused baselines, preserving immutable snapshot 
   const pending = await call(route + '/commands', { expectedRevision: 0, operationId: randomUUID(),
     action: 'manageBaseline', args: [model.baselines[0]!.id, 'delete', 'Unused'] }, 'agent');
   expect(pending.data.status).toBe('approval_required');
+  expect((await call(route + `/operations/${pending.data.operation.id}/decision`, { approve: true }, 'agent')).status).toBe(403);
   expect((await call(route)).data.model.baselines).toHaveLength(1);
   const accepted = await call(route + `/operations/${pending.data.operation.id}/decision`, { approve: true });
   expect(accepted.status).toBe(200);
@@ -136,6 +143,9 @@ it('allows exactly one concurrent revisioned write and preserves a shared undo t
 });
 it('requires approval when creating the first baseline and rejects edits to a published baseline', async () => {
   const { route } = await register();
+  const cloneWithoutParent = await call(route + '/commands', { expectedRevision: 0, operationId: randomUUID(),
+    action: 'newScenario', args: ['No parent', true] }, 'agent');
+  expect(cloneWithoutParent.data.status).toBe('approval_required');
   const pending = await call(route + '/commands', { expectedRevision: 0, operationId: randomUUID(), action: 'newScenario', args: ['First scenario'] }, 'agent');
   expect(pending.data.status).toBe('approval_required');
   expect((await call(route)).data.model.baselines).toHaveLength(0);
@@ -162,9 +172,10 @@ it('delivers revision events to authenticated clients', async () => {
 });
 it('invalidates approvals when project changes and preserves atomic validation', async () => {
   const { route } = await register();
-  const operation = { expectedRevision: 0, operationId: randomUUID(), action: 'pasteActivities', args: [[{ code: 'AGENT', name: 'Task' }]] };
+  const operation = { expectedRevision: 0, operationId: randomUUID(), action: 'baseline', args: ['Pending baseline'] };
   const pending = await call(route + '/commands', operation, 'agent');
-  expect((await call(route + '/commands', { ...operation, operationId: randomUUID(), args: [[{ code: 'UI', name: 'User task' }]] })).status).toBe(200);
+  expect((await call(route + '/commands', { expectedRevision: 0, operationId: randomUUID(),
+    action: 'pasteActivities', args: [[{ code: 'UI', name: 'User task' }]] })).status).toBe(200);
   const decided = await call(route + `/operations/${pending.data.operation.id}/decision`, { approve: true });
   expect(decided.data.operation.status).toBe('conflict');
   const invalid = await call(route + '/commands', { expectedRevision: 1, operationId: randomUUID(), action: 'pasteActivities',
@@ -202,7 +213,7 @@ it('persists duration proposals and finishes them without losing the underlying 
   expect(finished.data.model.activities.find((a: { id: string }) => a.id === 'activity-2').effortHours).toBe(88);
   expect(finished.data.model.activities.find((a: { id: string }) => a.id === 'activity-2').duration).toBe(12);
 });
-it('protects agent duration proposal resolution with a stable id, validation, and UI approval', async () => {
+it('resolves agent duration proposals directly while validating their stable id and selection', async () => {
   const { route } = await register();
   const proposed = await call(route + '/commands', { expectedRevision: 0, operationId: randomUUID(),
     action: 'updateActivities', args: [['activity-2'], { effortHours: 88 }] });
@@ -212,10 +223,7 @@ it('protects agent duration proposal resolution with a stable id, validation, an
   const command = { expectedRevision: 1, operationId: randomUUID(), action: 'finishEdit', args: [['activity-2'], proposal.id] };
   expect((await call(route + '/commands', { ...command, args: [['activity-2'], 'wrong'] }, 'agent')).status).toBe(409);
   expect((await call(route + '/commands', { ...command, args: [['unknown'], proposal.id] }, 'agent')).status).toBe(422);
-  const pending = await call(route + '/commands', command, 'agent');
-  expect(pending.data.status).toBe('approval_required');
-  expect((await call(route)).data.pendingEdit.id).toBe(proposal.id);
-  const accepted = await call(route + `/operations/${pending.data.operation.id}/decision`, { approve: true });
+  const accepted = await call(route + '/commands', command, 'agent');
   expect(accepted.data.pendingEdit).toBeUndefined();
   expect(accepted.data.model.activities.find((a: { id: string }) => a.id === 'activity-2').duration).toBe(11);
 });
@@ -238,23 +246,21 @@ it('migrates existing pending proposals once and retains their identifier after 
   url = `http://127.0.0.1:${await app.listen()}`;
   expect((await call(route + '/duration-proposal', { scenarioId: null }, 'agent')).data.proposal.id).toBe(proposal.id);
 });
-it('allows an approved agent to cancel a draft proposal without applying its edit', async () => {
+it('allows an agent to cancel a draft proposal without applying its edit', async () => {
   const { route } = await register();
   const proposed = await call(route + '/commands', { expectedRevision: 0, operationId: randomUUID(),
     action: 'updateActivities', args: [['activity-2'], { effortHours: 88 }] });
   const proposalId = proposed.data.pendingEdit.id;
   const command = { expectedRevision: 1, operationId: randomUUID(), action: 'finishEdit', args: [null, proposalId] };
-  const requested = await call(route + '/commands', command, 'agent');
-  expect(requested.data.status).toBe('approval_required');
+  const accepted = await call(route + '/commands', command, 'agent');
   expect((await call(route + '/commands', command, 'agent')).data.replayed).toBe(true);
-  const accepted = await call(route + `/operations/${requested.data.operation.id}/decision`, { approve: true });
   expect(accepted.data.pendingEdit).toBeUndefined();
   expect(accepted.data.model.activities.find((item: { id: string }) => item.id === 'activity-2').effortHours).toBe(72);
 });
 it('records expired approval outcomes without changing the project revision', async () => {
   const { route, id } = await register();
   const pending = await call(route + '/commands', { expectedRevision: 0, operationId: randomUUID(),
-    action: 'updateActivities', args: [['activity-2'], { name: 'Pending' }] }, 'agent');
+    action: 'baseline', args: ['Pending'] }, 'agent');
   const repository = new FileProjectRepository(directory);
   const record = (await repository.read(id))!;
   record.approvals[0]!.expiresAt = '2000-01-01T00:00:00.000Z';
@@ -266,7 +272,7 @@ it('records expired approval outcomes without changing the project revision', as
   const history = await call(route + '/history/query', { limit: 10, offset: 0, actor: 'system', outcome: 'expired' }, 'agent');
   expect(history.data).toMatchObject({ revision: 0, total: 1, items: [{ outcome: 'expired' }] });
 });
-it('requires approval for scenario tag and team removals and validates assigned owners', async () => {
+it('allows scenario tag removals directly and validates assigned owners', async () => {
   const model = publishBaseline(createDemo(), 'Baseline');
   model.project.tagCatalog = ['one', 'two'];
   model.project.team = { name: 'Team', calendarId: 'standard', members: [{ id: 'member', name: 'Member', allocationPercent: 100 }] };
@@ -278,15 +284,15 @@ it('requires approval for scenario tag and team removals and validates assigned 
   const scenarioId = created.data.activeScenarioId;
   const base = { expectedRevision: 1, operationId: randomUUID(), scenarioId };
   const tags = await call(route + '/commands', { ...base, action: 'setTagCatalog', args: [['one']] }, 'agent');
-  expect(tags.data.status).toBe('approval_required');
-  const bypass = await call(route + '/commands', { ...base, operationId: randomUUID(), action: 'updateEntity',
-    args: ['project', model.project.id, { tagCatalog: ['one'] }] }, 'agent');
-  expect(bypass.data.status).toBe('approval_required');
-  const assigned = await call(route + '/commands', { ...base, operationId: randomUUID(), action: 'updateEntity',
+  expect(tags.data.revision).toBe(2);
+  const changed = await call(route + '/commands', { ...base, expectedRevision: 2, operationId: randomUUID(), action: 'updateEntity',
+    args: ['project', model.project.id, { tagCatalog: [] }] }, 'agent');
+  expect(changed.data.revision).toBe(3);
+  const assigned = await call(route + '/commands', { ...base, expectedRevision: 3, operationId: randomUUID(), action: 'updateEntity',
     args: ['project', model.project.id, { team: { ...model.project.team, members: [] } }] }, 'agent');
   expect(assigned.status).toBe(422);
   const calendar = { ...model.calendars[0]!, id: 'alternate', name: 'Alternate' };
-  const added = await call(route + '/commands', { ...base, operationId: randomUUID(), action: 'upsertCalendar', args: [calendar] }, 'agent');
+  const added = await call(route + '/commands', { ...base, expectedRevision: 3, operationId: randomUUID(), action: 'upsertCalendar', args: [calendar] }, 'agent');
   expect(added.status).toBe(200);
   const listed = await call(route + '/metadata', { scenarioId, kind: 'calendars', limit: 10, offset: 0 }, 'agent');
   expect(listed.data.items.map((item: { id: string }) => item.id)).toEqual(['alternate', 'standard']);

@@ -98,11 +98,16 @@ Run the MCP stdio adapter with `npm run mcp`, or use the workspace MCP configura
 The adapter also supports filtered activity search, diagnostics, metadata, dependency analysis,
 duration proposals, operation history, and JSON import requests approved in the connected UI.
 See [MCP setup, permissions and limitations](docs/mcp.md).
+The workspace also provides the **WhatIfTool** custom agent, automatically discovered by
+VS Code; see the [agent deployment and verification instructions](docs/mcp.md#vs-code-agent-deployment).
 
 The service persists working sessions separately from `.pgplan` exports and remains available
 when the UI is closed. Separate UI/agent credentials are generated in the current user's
-`.whatiftool` directory; never commit or share the connection file. Agents may read and edit
-scenarios; changes to the draft, publishing and deletions require explicit user approval.
+`.whatiftool` directory; never commit or share the connection file. Agents can change the
+draft and scenarios, including deleting activities, dependencies and scenarios, without UI
+approval. Publishing or managing baselines and importing projects still require UI approval.
+The service does not enforce a chat confirmation for direct agent changes; protect the agent
+token and use a trusted client.
 Revision checks prevent one client from overwriting newer edits. Existing standalone mode
 remains available; do not use separate standalone copies as simultaneous writers for a
 connected project.

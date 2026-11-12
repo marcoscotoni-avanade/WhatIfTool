@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useStore } from 'zustand';
 import { connection, useProjectStore } from '../store/useProjectStore';
 import { Modal } from './shared';
-import type { ImportApproval } from '../store/connection';
+import type { Approval, ImportApproval } from '../store/connection';
 
 export function ConnectionPanel() {
   const c = useStore(connection.state), [open, setOpen] = useState(false);
@@ -54,20 +54,62 @@ export function ConnectionPanel() {
 
 export function ConnectionStatus() {
   const c = useStore(connection.state);
+  const pendingEdit = useProjectStore(s => s.pendingEdit);
+  const [selectedId, setSelectedId] = useState<string>();
   if (c.mode !== 'connected') return null;
-  return <section aria-label="Service status" className={c.error ? 'error-banner' : 'notice-banner'}>
+  const pending = c.approvals.filter(operation => operation.status === 'pending');
+  const selected = pending.find(operation => operation.id === selectedId);
+  return <><section aria-label="Service status" className={c.error ? 'error-banner' : 'notice-banner'}>
     <span>{c.error ?? (c.busy ? 'Waiting for authoritative service response…' : `Connected · revision ${c.revision} · live polling`)}</span>
     {c.error && <button disabled={c.busy} onClick={() => void connection.refresh()}>Refresh / recover</button>}
-    {c.approvals.filter(operation => operation.status === 'pending').map(operation => <div key={operation.id}>
-      <strong>Agent requests {operation.action}</strong> · {operation.scenarioId ?? 'working draft'} · expected r{operation.expectedRevision} · expires {operation.expiresAt}
-      {operation.diff?.length ? <div aria-label="Proposed changes">{operation.diff.map((change, index) => <details key={`${change.target}-${change.id}-${index}`} open>
-        <summary>{change.target} · {change.id}</summary>
-        <strong>Before</strong><pre style={{ maxHeight: 140, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{JSON.stringify(change.before, null, 2) ?? '(not present)'}</pre>
-        <strong>After</strong><pre style={{ maxHeight: 140, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{JSON.stringify(change.after, null, 2) ?? '(not present)'}</pre>
-      </details>)}</div> : null}
-      <pre style={{ maxHeight: 140, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{JSON.stringify(operation.args, null, 2)}</pre>
-      <button disabled={c.busy || !!c.error || !!useProjectStore.getState().pendingEdit} onClick={() => void connection.decide(operation.id, true)}>Approve</button>
-      <button disabled={c.busy || !!c.error} onClick={() => void connection.decide(operation.id, false)}>Reject</button>
-    </div>)}
-  </section>;
+    {pending.length > 0 && <button onClick={() => setSelectedId(pending[0]!.id)}>
+      Review agent requests ({pending.length})
+    </button>}
+  </section>
+  {selected && <Modal title="Review agent request" close={() => setSelectedId(undefined)} wide className="approval-modal">
+    <div className="approval-content">
+      {pending.length > 1 && <label className="field"><span>Pending request</span>
+        <select aria-label="Pending request" value={selected.id} onChange={e => setSelectedId(e.target.value)}>
+          {pending.map((operation, index) => <option key={operation.id} value={operation.id}>
+            {index + 1}. {operation.action} · {operation.scenarioId ?? 'working draft'} · {operation.id}
+          </option>)}
+        </select>
+      </label>}
+      <p><strong>Agent requests {selected.action}</strong> · {selected.scenarioId ?? 'working draft'} · expected r{selected.expectedRevision} · expires {selected.expiresAt}</p>
+      <h3>Proposed changes ({selected.diff?.length ?? 0})</h3>
+      {selected.diff?.length ? <div aria-label="Proposed changes">{selected.diff.map((change, index) =>
+        <details key={`${selected.id}-${change.target}-${change.id}-${index}`}>
+          <summary>{describeChange(change)}</summary>
+          <strong>Before</strong><pre>{JSON.stringify(change.before, null, 2) ?? '(not present)'}</pre>
+          <strong>After</strong><pre>{JSON.stringify(change.after, null, 2) ?? '(not present)'}</pre>
+        </details>)}</div> : <p>No change details available.</p>}
+      <details>
+        <summary>Request arguments</summary>
+        <pre>{JSON.stringify(selected.args, null, 2)}</pre>
+      </details>
+      {c.error && <p role="alert">{c.error}</p>}
+      {pendingEdit && <p>Complete the pending duration proposal before approving this request.</p>}
+    </div>
+    <div className="dialog-actions approval-actions">
+      <button className="primary" disabled={c.busy || !!c.error || !!pendingEdit} onClick={() => {
+        void connection.decide(selected.id, true).then(ok => { if (ok) setSelectedId(undefined); });
+      }}>Approve</button>
+      <button disabled={c.busy || !!c.error} onClick={() => {
+        void connection.decide(selected.id, false).then(ok => { if (ok) setSelectedId(undefined); });
+      }}>Reject</button>
+      <button onClick={() => setSelectedId(undefined)}>Close</button>
+    </div>
+  </Modal>}</>;
+}
+
+function describeChange(change: NonNullable<Approval['diff']>[number]) {
+  const value = change.after ?? change.before;
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    const label = [record.code, record.name].filter(part => typeof part === 'string' && part).join(' · ');
+    if (label) return `${change.target} · ${label} · ${change.id}`;
+    if (typeof record.predecessorId === 'string' && typeof record.successorId === 'string')
+      return `${change.target} · ${record.predecessorId} → ${record.successorId} · ${change.id}`;
+  }
+  return `${change.target} · ${change.id}`;
 }

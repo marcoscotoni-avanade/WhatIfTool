@@ -6,7 +6,7 @@ import { createPlannerServer } from '../../apps/planner-service/src/server';
 import type { RemoteSnapshot } from '../../apps/desktop/src/store/connection';
 import { createProject } from '@planner/domain';
 
-test('real connected UI approves an agent edit and publishes UI edits to the authoritative service', async ({ page }) => {
+test('connected UI reviews baselines and reflects direct agent edits', async ({ page }) => {
   test.setTimeout(60_000);
   const directory = resolve(`.connected-e2e-${randomUUID()}`);
   const uiToken = randomUUID(), agentToken = randomUUID();
@@ -20,6 +20,7 @@ test('real connected UI approves an agent edit and publishes UI edits to the aut
     return await response.json() as T;
   }
   try {
+    await page.setViewportSize({ width: 900, height: 600 });
     await page.goto('/');
     await page.getByRole('button', { name: 'Open Demo Project', exact: true }).click();
     await page.getByRole('button', { name: 'Connect service', exact: true }).click();
@@ -32,27 +33,66 @@ test('real connected UI approves an agent edit and publishes UI edits to the aut
     const route = `/api/projects/${projects[0]!.id}`;
     const original = await agentRead<RemoteSnapshot>(route);
     const activityId = 'activity-2';
-    const proposedName = 'Approved by the real connected UI';
+    const proposedName = 'Written directly by the agent';
     const requested = await fetch(url + route + '/commands', {
       method: 'POST', headers: { Authorization: `Bearer ${agentToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ expectedRevision: original.revision, operationId: randomUUID(),
-        action: 'updateActivities', args: [[activityId], { name: proposedName }] }),
+        action: 'baseline', args: ['First baseline'] }),
     });
     expect(requested.ok).toBe(true);
     const operation = await requested.json() as { status: string; operation: { id: string } };
     expect(operation.status).toBe('approval_required');
+    const secondRequest = await fetch(url + route + '/commands', {
+      method: 'POST', headers: { Authorization: `Bearer ${agentToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRevision: original.revision, operationId: randomUUID(),
+        action: 'baseline', args: ['Second baseline'] }),
+    });
+    expect(secondRequest.ok).toBe(true);
+    const secondOperation = await secondRequest.json() as { status: string; operation: { id: string } };
+    expect(secondOperation.status).toBe('approval_required');
     expect((await agentRead<RemoteSnapshot>(route)).model.activities.find(activity => activity.id === activityId)!.name).not.toBe(proposedName);
     const status = page.getByRole('region', { name: 'Service status' });
-    await expect(status).toContainText('Agent requests updateActivities');
-    await expect(status).toContainText(proposedName);
-    await expect(status.getByLabel('Proposed changes')).toContainText('Before');
-    await expect(status.getByLabel('Proposed changes')).toContainText('After');
-    await expect(status.getByLabel('Proposed changes')).toContainText(proposedName);
-    await status.getByRole('button', { name: 'Approve', exact: true }).click();
+    const review = status.getByRole('button', { name: 'Review agent requests (2)' });
+    await expect(review).toBeVisible();
+    await review.click();
+    const approvalDialog = page.getByRole('dialog', { name: 'Review agent request' });
+    await expect(approvalDialog).toContainText('Agent requests baseline');
+    await approvalDialog.getByLabel('Pending request').selectOption(secondOperation.operation.id);
+    const changes = approvalDialog.getByLabel('Proposed changes');
+    const details = changes.locator('details');
+    expect(await details.count()).toBeGreaterThan(0);
+    await expect(details.first()).not.toHaveAttribute('open', '');
+    for (const detail of await details.all()) await detail.locator('summary').click();
+    await expect(changes).toContainText('Second baseline');
+    const reject = approvalDialog.getByRole('button', { name: 'Reject', exact: true });
+    const box = await reject.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(600);
+    await reject.click();
+    await expect(approvalDialog).toBeHidden();
+    expect((await agentRead<{ status: string }>(route + `/operations/${secondOperation.operation.id}`)).status).toBe('rejected');
+    await status.getByRole('button', { name: 'Review agent requests (1)' }).click();
+    await expect(approvalDialog.getByLabel('Proposed changes').locator('details').first()).not.toHaveAttribute('open', '');
+    await approvalDialog.getByLabel('Proposed changes').locator('summary').first().click();
+    await expect(approvalDialog.getByLabel('Proposed changes')).toContainText('Before');
+    await expect(approvalDialog.getByLabel('Proposed changes')).toContainText('After');
+    await expect(approvalDialog.getByLabel('Proposed changes')).toContainText('First baseline');
+    await approvalDialog.getByRole('button', { name: 'Close', exact: true }).click();
+    expect((await agentRead<{ status: string }>(route + `/operations/${operation.operation.id}`)).status).toBe('pending');
+    await status.getByRole('button', { name: 'Review agent requests (1)' }).click();
+    await approvalDialog.getByRole('button', { name: 'Approve', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Connected · r1', exact: true })).toBeVisible();
+    const directEdit = await fetch(url + route + '/commands', {
+      method: 'POST', headers: { Authorization: `Bearer ${agentToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRevision: 1, operationId: randomUUID(),
+        action: 'updateActivities', args: [[activityId], { name: proposedName }] }),
+    });
+    expect(directEdit.ok).toBe(true);
+    expect((await directEdit.json()).revision).toBe(2);
     const nameCell = page.locator(`.ag-pinned-left-cols-container [row-id="${activityId}"] [col-id="name"]`);
     await expect(nameCell).toHaveText(proposedName);
-    await expect(page.getByRole('button', { name: 'Connected · r1', exact: true })).toBeVisible();
-    await expect.poll(async () => (await agentRead<RemoteSnapshot>(route)).revision).toBe(1);
+    await expect(page.getByRole('button', { name: 'Connected · r2', exact: true })).toBeVisible();
+    await expect.poll(async () => (await agentRead<RemoteSnapshot>(route)).revision).toBe(2);
     await expect.poll(async () => (await agentRead<RemoteSnapshot>(route)).model.activities.find(activity => activity.id === activityId)!.name).toBe(proposedName);
     const operationStatus = await agentRead<{ status: string }>(route + `/operations/${operation.operation.id}`);
     expect(operationStatus.status).toBe('approved');
@@ -62,7 +102,7 @@ test('real connected UI approves an agent edit and publishes UI edits to the aut
     await page.locator('.ag-cell-inline-editing input').press('Enter');
     await expect(nameCell).toHaveText(uiName);
     await expect.poll(async () => (await agentRead<RemoteSnapshot>(route)).model.activities.find(activity => activity.id === activityId)!.name).toBe(uiName);
-    await expect(page.getByRole('button', { name: 'Connected · r2', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Connected · r3', exact: true })).toBeVisible();
     await expect(status).toContainText('live polling');
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(page.getByText('Authoritative project snapshot exported locally.', { exact: true })).toBeVisible();
@@ -80,11 +120,7 @@ test('real connected UI approves an agent edit and publishes UI edits to the aut
       body: JSON.stringify({ expectedRevision: proposalSnapshot.revision, operationId: randomUUID(),
         action: 'finishEdit', args: [[activityId], proposalSnapshot.pendingEdit!.id] }),
     });
-    expect((await decisionRequest.json()).status).toBe('approval_required');
-    const dialog = page.getByRole('dialog', { name: 'Recalculate duration?' });
-    await expect(dialog.getByRole('region', { name: 'Agent duration request' })).toContainText('MIG');
-    await dialog.getByRole('button', { name: 'Approve agent decision' }).click();
-    await expect(dialog).toBeHidden();
+    expect((await decisionRequest.json()).revision).toBe(proposalSnapshot.revision + 1);
     await expect.poll(async () => (await agentRead<RemoteSnapshot>(route)).pendingEdit).toBeUndefined();
     expect((await agentRead<RemoteSnapshot>(route)).model.activities.find(activity => activity.id === activityId)!.duration).toBe(11);
     const newProject = createProject('Imported from agent');

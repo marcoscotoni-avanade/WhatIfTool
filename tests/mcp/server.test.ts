@@ -312,6 +312,22 @@ describe('MCP server stdio integration', () => {
       fieldName: '$entity',
       value: expect.objectContaining({ code: 'MCP-001', name: 'Agent activity', duration: 2 }),
     }));
+    const draftEdit = await client.callTool({ name: 'apply_changes', arguments: {
+      projectId, scenarioId: null, expectedRevision: 8, operationId: 'draft-live',
+      changes: { activities: [{ patch: { code: 'DRAFT-1', name: 'Direct draft activity' } }] },
+    } });
+    expect(draftEdit.isError, JSON.stringify(draftEdit.content)).toBeUndefined();
+    expect(draftEdit.structuredContent).toMatchObject({ data: { result: { revision: 9 } } });
+    const afterDraftEdit = await ui(`/api/projects/${projectId}`);
+    expect(afterDraftEdit.model.activities).toContainEqual(expect.objectContaining({ code: 'DRAFT-1', name: 'Direct draft activity' }));
+    const draftId = afterDraftEdit.model.activities.find((item: { code: string }) => item.code === 'DRAFT-1').id as string;
+    const deleted = await client.callTool({ name: 'request_delete', arguments: {
+      projectId, scenarioId: null, expectedRevision: 9, operationId: 'delete-draft-live',
+      target: 'selection', selection: { activityIds: [draftId] },
+    } });
+    expect(deleted.isError, JSON.stringify(deleted.content)).toBeUndefined();
+    expect(deleted.structuredContent).toMatchObject({ data: { result: { revision: 10 } } });
+    expect((await ui(`/api/projects/${projectId}`)).model.activities).toEqual([]);
   });
 });
 

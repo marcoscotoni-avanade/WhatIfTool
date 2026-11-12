@@ -134,7 +134,7 @@ export function registerPlannerTools(server: McpServer, planner: PlannerClient):
       activityIds: z.array(z.string().min(1)).min(1).max(1000) }).strict(),
     z.object({ ...writeInput, proposalId: z.string().min(1), resolution: z.enum(['keep_durations', 'cancel']) }).strict(),
   ]);
-  register('resolve_duration_proposal', 'Resolve a matching proposal by applying selected calculated durations, keeping existing durations, or cancelling the pending edit. Draft changes require UI approval.', durationResolution, async input => {
+  register('resolve_duration_proposal', 'Resolve a matching proposal by applying selected calculated durations, keeping existing durations, or cancelling the pending edit. This applies without UI approval.', durationResolution, async input => {
     const selected = input.resolution === 'apply_selected' ? input.activityIds : input.resolution === 'keep_durations' ? [] : null;
     const result = await planner.command(input.projectId, commandFor(input, 'finishEdit', [selected, input.proposalId]));
     return { result, operationId: input.operationId, projectId: input.projectId, scenarioId: input.scenarioId };
@@ -153,13 +153,13 @@ export function registerPlannerTools(server: McpServer, planner: PlannerClient):
   const teamSchema = z.object({ name: z.string().trim().min(1), calendarId: z.string().min(1),
     members: z.array(z.object({ id: z.string().min(1), name: z.string().trim().min(1),
       allocationPercent: z.number().min(0).max(100) }).strict()).max(1000) }).strict();
-  register('update_team', 'Replace the team. Assigned members cannot be removed; other member removals and draft writes require UI approval. Allocation changes may create duration proposals.', z.object({
+  register('update_team', 'Replace the team without UI approval. Assigned members cannot be removed. Allocation changes may create duration proposals.', z.object({
     ...writeInput, team: teamSchema,
   }).strict(), async input => {
     const result = await planner.command(input.projectId, commandFor(input, 'updateEntity', ['project', input.projectId, { team: input.team }]));
     return { result, operationId: input.operationId, projectId: input.projectId, scenarioId: input.scenarioId };
   }, { readOnlyHint: false });
-  register('set_tag_catalog', 'Replace the tag catalog; removed tags are atomically unassigned from tasks. Removing catalog entries and draft writes require UI approval.', z.object({
+  register('set_tag_catalog', 'Replace the tag catalog without UI approval; removed tags are atomically unassigned from tasks.', z.object({
     ...writeInput, tags: z.array(z.string().trim().min(1)).max(1000),
   }).strict(), async input => {
     const result = await planner.command(input.projectId, commandFor(input, 'setTagCatalog', [input.tags]));
@@ -253,7 +253,7 @@ export function registerPlannerTools(server: McpServer, planner: PlannerClient):
     return planner.preview(input.projectId, request);
   }, { readOnlyHint: true });
 
-  register('apply_changes', 'Apply bounded activity/dependency changes using revision compare-and-swap and an operation id. Sensitive writes may require local UI approval.', previewSchema, async input => {
+  register('apply_changes', 'Apply bounded activity/dependency changes without UI approval, using revision compare-and-swap and an operation id.', previewSchema, async input => {
     const request = commandFor(input, 'applyChanges', [input.changes]);
     const result = await planner.command(input.projectId, request);
     return { result, operationId: input.operationId };
@@ -282,7 +282,7 @@ export function registerPlannerTools(server: McpServer, planner: PlannerClient):
       ...writeInput, target: z.literal('scenario'), scenarioId: z.string().min(1),
     }).strict(),
   ]);
-  register('request_delete', 'Request deleting selected activity/dependency ids or removing the explicitly named scenario. Sensitive writes may require local UI approval.', deleteSchema, async input => {
+  register('request_delete', 'Delete selected activity/dependency ids or remove the explicitly named scenario without UI approval.', deleteSchema, async input => {
     const command = input.target === 'scenario'
       ? commandFor(input, 'removeScenario', [])
       : commandFor(input, 'deleteSelection', [], input.selection);

@@ -29,7 +29,7 @@ export function Field({ label, value, onCommit, type = 'text', options, min, max
       onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setText(String(value ?? '')); }} />}
     {hint && <small>{hint}</small>}</label>;
 }
-export function Modal({ title, children, close, wide = false }: { title: string; children: ReactNode; close: () => void; wide?: boolean }) {
+export function Modal({ title, children, close, wide = false, className = '' }: { title: string; children: ReactNode; close: () => void; wide?: boolean; className?: string }) {
   const closeRef = useRef(close), error = useProjectStore(s => s.error);
   useEffect(() => { closeRef.current = close; }, [close]);
   useEffect(() => {
@@ -49,7 +49,7 @@ export function Modal({ title, children, close, wide = false }: { title: string;
     return () => { document.removeEventListener('keydown', key); if (previous instanceof HTMLElement) previous.focus(); };
   }, []);
   return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) close(); }}>
-    <section className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+    <section className={`modal ${wide ? 'wide' : ''} ${className}`} role="dialog" aria-modal="true" aria-label={title}>
       <header><h2>{title}</h2><button aria-label="Close dialog" onClick={close}>X</button></header>
       {error && <div className="modal-error" role="status"><p>{error}</p><button onClick={() => useProjectStore.setState({ error: undefined })}>Dismiss message</button></div>}
       {children}

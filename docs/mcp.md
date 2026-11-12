@@ -18,15 +18,41 @@ npm run mcp
 
 The VS Code MCP entry in `.vscode/mcp.json` launches the same MCP process from the workspace. It does not launch the service; start `npm run service` first.
 
+## VS Code agent deployment
+
+The workspace includes [`WhatIfTool`](../.github/agents/whatiftool.agent.md), a custom
+Copilot agent. VS Code discovers this file automatically when the repository root is open;
+there is no separate copy or installation step. Sharing the repository shares the agent with
+other workspace users. It is not automatically installed in other workspaces or machines.
+
+1. Open the repository root in VS Code with Copilot enabled and select the Copilot session target.
+   Install the project dependencies if they are missing, then start `npm run service`.
+2. The existing `.vscode/mcp.json` provides `whatiftool-planner`; start or trust it when
+   prompted. The editor can forward this configuration to Copilot. If it is not available,
+   check **Chat: Open Customizations → MCP Servers** and the server output.
+3. Open a new chat and select **WhatIfTool** in the agent dropdown. If it is missing, check
+   **Chat: Open Customizations → Agents**, the workspace root and the selected session target;
+   reload the VS Code window if needed.
+4. Verify with a read-only request such as “List the available projects”, then inspect the
+   tool call. For a write, use a disposable test project and check that the agent describes
+   the changes and waits for a separate explicit confirmation before calling a write tool.
+
+The agent asks once for each coherent set of changes and favors targeted, paginated reads.
+Its chat confirmation is an instruction to the model, not an authorization enforced by the
+service; another client or a noncompliant model can write with the agent token without it.
+VS Code or organization policies may also require their own tool approvals. Select an
+available lower-cost model in the model picker if appropriate; neither the agent nor its
+configuration guarantees token consumption or credit cost.
+
 By default the adapter connects to `http://127.0.0.1:1430`. The service URL must be `http://127.0.0.1:<port>` (`localhost` is normalized to `127.0.0.1`); HTTPS, IPv6, remote hosts, paths, query strings, and embedded credentials are rejected before any token is sent. The service creates its private connection file at `~/.whatiftool/connection.json`. It contains `url`, `agentToken`, and `uiToken`; the MCP adapter uses only `url` and `agentToken`, never `uiToken`. Keep this file private and protect it with user-only filesystem permissions. Alternatively, set `PLANNER_SERVICE_URL` and `PLANNER_AGENT_TOKEN`, or set `PLANNER_CONNECTION_FILE` to another private JSON file with those fields.
 
-The service authenticates MCP requests with the agent bearer token. The desktop UI uses its separate UI token and handles approval-required publish, delete, and other sensitive operations. The MCP server can request these operations and read their status, but it does not expose an approval tool.
+The service authenticates MCP requests with the agent bearer token. Agent commands can directly change the draft and scenarios, including deleting activities, dependencies and scenarios, without UI approval. The service does not verify a human confirmation in chat: any holder of the agent token can perform these operations. Use a trusted client and keep the token private. Baseline publication and management, including scenario creation that implicitly publishes the first baseline, and project imports still require approval with the separate UI token. Undo and redo through the service also retain UI approval. The MCP server cannot approve these requests.
 
 ## Desktop UI connection
 
 The desktop UI starts in standalone mode. Use **Connect service** in the application header to connect it to the loopback service with its URL (default `http://127.0.0.1:1430`) and the UI token; the UI token is kept in memory and is never read by this MCP adapter. On initial connect, New, or Open, the UI registers a project with the service. When opening an existing project ID, the service copy is authoritative and the UI warns if its content differs from the local copy.
 
-While connected, the UI polls every two seconds. Network failures and revision conflicts block connected edits until the user refreshes or recovers; a response lost after a write is not replayed automatically, so refresh before retrying. Approval prompts remain in the UI and show the requested action, arguments, scenario, revision, and expiry. Saving checkpoints the authoritative service snapshot. Disconnecting returns to standalone mode with a new local history.
+While connected, the UI polls every two seconds. Network failures and revision conflicts block connected edits until the user refreshes or recovers; a response lost after a write is not replayed automatically, so refresh before retrying. Use **Review agent requests** in the status bar to inspect and decide pending operations. The dialog shows the action, scenario, revision and expiry, with individual changes and request arguments expandable on demand; closing it leaves the request pending. Saving checkpoints the authoritative service snapshot. Disconnecting returns to standalone mode with a new local history.
 
 Connected CSV imports use the UI-only `replaceDocument` compare-and-swap flow; arbitrary callback candidates are not applied locally. Graph layout and drag changes use the bounded activity-patch command.
 
@@ -51,13 +77,13 @@ an inheriting child, not an independent copy: later parent changes propagate unl
 `get_duration_proposal` returns the pending proposal ID, revision and individual calculations
 without exposing its complete candidate document. `resolve_duration_proposal` accepts that ID
 and chooses `apply_selected`, `keep_durations`, or `cancel`. Selected IDs must belong to the
-proposal and have applicable calculated durations. Resolving a draft proposal requires UI
-approval; stale revisions and obsolete proposal IDs are rejected.
+proposal and have applicable calculated durations. Resolution does not require UI approval;
+stale revisions and obsolete proposal IDs are rejected.
 
 `get_team`, `get_tag_catalog`, `list_calendars`, and `get_calendar` read metadata from the
 requested scenario. `update_team`, `set_tag_catalog`, and `upsert_calendar` use revisioned
-service commands. Removing team members or catalog tags requires UI approval even in scenarios;
-an assigned member cannot be removed until activities are reassigned. Calendar and allocation
+service commands without UI approval; an assigned member cannot be removed until activities
+are reassigned. Removing catalog tags also unassigns them from activities. Calendar and allocation
 changes can create duration proposals. Calendar deletion is not exposed.
 
 `list_dependencies` supports endpoint/type filters and bounded ancestor or descendant

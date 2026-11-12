@@ -281,25 +281,10 @@ export class PlannerService {
   }
   private sensitive(input: PlannerCommand, record: ProjectRecord, actor: Actor) {
     if (actor === 'ui') return false;
-    if (['baseline', 'manageBaseline', 'deleteSelection', 'removeScenario', 'undo', 'redo'].includes(input.action)) return true;
-    if (input.action === 'newScenario') return !input.args[1] && !record.model.baselines.some(b => !b.archived);
-    const current = resolveScenario(record.model, input.scenarioId);
-    if (input.action === 'setTagCatalog') {
-      const tags = z.array(z.string()).parse(input.args[0]).map(tag => tag.trim().toLocaleLowerCase());
-      if ((current.project.tagCatalog ?? []).some(tag => !tags.includes(tag.toLocaleLowerCase()))) return true;
-    }
-    if (input.action === 'updateEntity' && input.args[0] === 'project') {
-      const changes = patch.parse(input.args[2]);
-      if (changes.tagCatalog !== undefined) {
-        const tags = z.array(z.string()).parse(changes.tagCatalog).map(tag => tag.trim().toLocaleLowerCase());
-        if ((current.project.tagCatalog ?? []).some(tag => !tags.includes(tag.toLocaleLowerCase()))) return true;
-      }
-      if (changes.team !== undefined) {
-        const team = z.object({ members: z.array(z.object({ id: string }).passthrough()) }).passthrough().parse(changes.team);
-        if ((current.project.team?.members ?? []).some(member => !team.members.some(item => item.id === member.id))) return true;
-      }
-    }
-    return !input.scenarioId || (input.action === 'finishEdit' && !record.pendingEdit?.scenarioId);
+    if (['baseline', 'manageBaseline', 'undo', 'redo'].includes(input.action)) return true;
+    if (input.action === 'newScenario')
+      return !(input.args[1] && input.scenarioId) && !record.model.baselines.some(b => !b.archived);
+    return false;
   }
   execute(id: string, raw: unknown, actor: Actor) {
     return this.exclusive(id, async () => {
