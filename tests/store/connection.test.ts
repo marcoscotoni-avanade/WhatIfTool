@@ -127,6 +127,34 @@ it('polls pending approvals even without document revision changes and authentic
   expect(JSON.parse(String(call[1]?.body))).toEqual({ approve: false });
 });
 
+it('queues a connected delete behind an in-flight refresh without reporting a false busy error', async () => {
+  const { browser, controller, fetcher, server } = setup();
+  await controller.connect('http://127.0.0.1:1430', 'token');
+  const id = toModel(browser.getState().document).activities[0]!.id;
+  browser.getState().select([id]);
+
+  const originalFetch = fetcher.getMockImplementation();
+  if (!originalFetch) throw new Error('Test fetcher implementation is missing.');
+  let releaseRefresh!: () => void;
+  const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
+  fetcher.mockImplementationOnce(async (...args) => {
+    await refreshGate;
+    return originalFetch(...args);
+  });
+
+  const refresh = controller.refresh();
+  expect(controller.state.getState().busy).toBe(true);
+  browser.getState().deleteSelection();
+  expect(controller.state.getState().error).toBeUndefined();
+  releaseRefresh();
+
+  await refresh;
+  await controller.settle();
+  expect(controller.state.getState().error).toBeUndefined();
+  expect(toModel(server.getState().document).activities.some(activity => activity.id === id)).toBe(false);
+  expect(toModel(browser.getState().document).activities.some(activity => activity.id === id)).toBe(false);
+});
+
 it('does not save independent local edits after network loss and never silently falls back', async () => {
   const { browser, controller, fetcher } = setup();
   await controller.connect('http://127.0.0.1:1430', 'token');

@@ -1,8 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { once } from 'node:events';
-import { mkdir, rm } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import ExcelJS from 'exceljs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -75,8 +77,7 @@ describe('MCP server stdio integration', () => {
     const address = httpServer.address();
     if (!address || typeof address === 'string') throw new Error('Test HTTP server failed to bind.');
 
-    client = new Client({ name: 'mcp-integration-test', version: '1.0.0' }, { capabilities: {} });
-    transport = new StdioClientTransport({
+    const createTransport = () => new StdioClientTransport({
       command: process.execPath,
       args: [resolve('node_modules/tsx/dist/cli.mjs'), resolve('apps/mcp-server/src/index.ts')],
       cwd: process.cwd(),
@@ -87,6 +88,8 @@ describe('MCP server stdio integration', () => {
       },
       stderr: 'inherit',
     });
+    client = new Client({ name: 'mcp-integration-test', version: '1.0.0' }, { capabilities: {} });
+    transport = createTransport();
     await client.connect(transport);
 
     const listed = await client.listTools();
@@ -95,8 +98,24 @@ describe('MCP server stdio integration', () => {
       'analyze_dependencies', 'analyze_milestone', 'apply_changes', 'calculate_schedule', 'compare_scenarios', 'create_scenario', 'diagnose_plan',
       'explain_risk', 'export_project', 'get_activity', 'get_calendar', 'get_duration_proposal', 'get_import_status', 'get_operation_status', 'get_project',
       'get_tag_catalog', 'get_team', 'list_activities', 'list_calendars', 'list_dependencies', 'list_operation_history', 'list_projects', 'list_scenarios', 'preview_changes', 'request_delete',
-      'rename_scenario', 'request_import_project', 'request_manage_baseline', 'request_publish_baseline', 'resolve_duration_proposal', 'set_tag_catalog', 'update_team', 'upsert_calendar',
+      'read_document', 'rename_scenario', 'request_import_project', 'request_manage_baseline', 'request_publish_baseline', 'resolve_duration_proposal', 'set_tag_catalog', 'update_team', 'upsert_calendar',
     ].sort());
+
+    const invalidDocument = await client.callTool({ name: 'read_document', arguments: { path: 'relative.xlsx' } });
+    expect(invalidDocument.isError).toBe(true);
+    const documentDirectory = await mkdtemp(join(tmpdir(), 'whatif-mcp-document-test-'));
+    try {
+      const path = join(documentDirectory, 'plan.xlsx');
+      const workbook = new ExcelJS.Workbook();
+      workbook.addWorksheet('Plan').addRow(['Activity']);
+      await workbook.xlsx.writeFile(path);
+      const document = await client.callTool({ name: 'read_document', arguments: { path } });
+      expect(document.structuredContent).toMatchObject({
+        data: { format: 'xlsx', rows: [{ cells: [{ address: 'A1', value: 'Activity' }] }] },
+      });
+    } finally {
+      await rm(documentDirectory, { recursive: true, force: true });
+    }
 
     const projects = await client.callTool({ name: 'list_projects', arguments: { limit: 1, offset: 1 } });
     expect(projects.structuredContent).toEqual({

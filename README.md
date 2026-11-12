@@ -105,9 +105,10 @@ The service persists working sessions separately from `.pgplan` exports and rema
 when the UI is closed. Separate UI/agent credentials are generated in the current user's
 `.whatiftool` directory; never commit or share the connection file. Agents can change the
 draft and scenarios, including deleting activities, dependencies and scenarios, without UI
-approval. Publishing or managing baselines and importing projects still require UI approval.
-The service does not enforce a chat confirmation for direct agent changes; protect the agent
-token and use a trusted client.
+approval. The agent applies clear requests without a separate chat confirmation and asks only
+when details needed for a correct change are ambiguous. Publishing or managing baselines and
+importing projects may still require UI approval. The service itself trusts the agent token,
+so keep it private and use a trusted client.
 Revision checks prevent one client from overwriting newer edits. Existing standalone mode
 remains available; do not use separate standalone copies as simultaneous writers for a
 connected project.

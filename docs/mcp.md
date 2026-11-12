@@ -1,6 +1,6 @@
 # Planner MCP server
 
-The local MCP server exposes bounded project, activity, scenario, schedule, risk, change-preview, approval-request, operation-status, and JSON-export tools over stdio. It connects only to the planner HTTP service; it has no direct database, source-code, or arbitrary-path tools.
+The local MCP server exposes bounded project, activity, scenario, schedule, risk, change-preview, approval-request, operation-status, JSON-export, and document-reading tools over stdio. Planner operations connect only to the planner HTTP service; the document tool additionally reads local files as described below.
 
 ## Run locally
 
@@ -34,25 +34,47 @@ other workspace users. It is not automatically installed in other workspaces or 
    **Chat: Open Customizations → Agents**, the workspace root and the selected session target;
    reload the VS Code window if needed.
 4. Verify with a read-only request such as “List the available projects”, then inspect the
-   tool call. For a write, use a disposable test project and check that the agent describes
-   the changes and waits for a separate explicit confirmation before calling a write tool.
+   tool call. For a write, use a disposable test project and check that a clear request is
+   applied without a separate chat confirmation. Ambiguous project, scenario, task, or change
+   details should lead to a focused clarification instead.
 
-The agent asks once for each coherent set of changes and favors targeted, paginated reads.
-Its chat confirmation is an instruction to the model, not an authorization enforced by the
-service; another client or a noncompliant model can write with the agent token without it.
-VS Code or organization policies may also require their own tool approvals. Select an
-available lower-cost model in the model picker if appropriate; neither the agent nor its
-configuration guarantees token consumption or credit cost.
+The agent executes clear requests directly and asks only when information needed for a correct
+change is ambiguous. Baseline publication and management and project imports may still require
+their separate approval in the planner UI. The service itself trusts the agent token, so keep
+it private and use a trusted client. VS Code or organization policies may also require their
+own tool approvals. Select an available lower-cost model in the model picker if appropriate;
+neither the agent nor its configuration guarantees token consumption or credit cost.
+
+### Excel and PDF documents
+
+Attach an `.xlsx` or `.pdf` file to the WhatIfTool chat and ask what to extract or how to
+use it. If the chat does not provide its contents directly, the agent uses `read_document`
+with the file's absolute local path; if the session cannot provide an accessible path, supply
+one or paste the relevant content. Availability of local attachments depends on the chat
+session and its access policies.
+
+The tool reads files locally without uploading them to a document service. It returns one
+Excel sheet and up to 50 rows per call, with cell addresses, values and workbook sheet
+metadata, or one PDF page per call, with text positions. Files are limited to 20 MiB and
+responses to 100,000 characters. Excel formulas contain cached results, not recalculations;
+PDF scans without extractable text require OCR outside this tool. Password-protected,
+unsupported, oversized or inaccessible documents return an error. Document text and extracted
+data still enter the chat context when the agent uses them.
+
+`read_document` can read any accessible local `.xlsx` or `.pdf` path supplied by its caller;
+the restriction to user-provided documents is an agent instruction, not a filesystem security
+boundary. Only use the MCP server with trusted clients and appropriate filesystem permissions.
+Reading a document does not modify a project or bypass the approval required for imports.
 
 By default the adapter connects to `http://127.0.0.1:1430`. The service URL must be `http://127.0.0.1:<port>` (`localhost` is normalized to `127.0.0.1`); HTTPS, IPv6, remote hosts, paths, query strings, and embedded credentials are rejected before any token is sent. The service creates its private connection file at `~/.whatiftool/connection.json`. It contains `url`, `agentToken`, and `uiToken`; the MCP adapter uses only `url` and `agentToken`, never `uiToken`. Keep this file private and protect it with user-only filesystem permissions. Alternatively, set `PLANNER_SERVICE_URL` and `PLANNER_AGENT_TOKEN`, or set `PLANNER_CONNECTION_FILE` to another private JSON file with those fields.
 
-The service authenticates MCP requests with the agent bearer token. Agent commands can directly change the draft and scenarios, including deleting activities, dependencies and scenarios, without UI approval. The service does not verify a human confirmation in chat: any holder of the agent token can perform these operations. Use a trusted client and keep the token private. Baseline publication and management, including scenario creation that implicitly publishes the first baseline, and project imports still require approval with the separate UI token. Undo and redo through the service also retain UI approval. The MCP server cannot approve these requests.
+The service authenticates MCP requests with the agent bearer token. Direct agent changes to the draft and scenarios do not require a separate chat confirmation. The agent's clarification policy is not an authorization boundary: any holder of the token can perform direct operations. Keep it private and use trusted clients. Baseline publication and management and project imports may still require approval with the separate UI token. Undo and redo through the service also retain UI approval. The MCP server cannot approve these requests.
 
 ## Desktop UI connection
 
 The desktop UI starts in standalone mode. Use **Connect service** in the application header to connect it to the loopback service with its URL (default `http://127.0.0.1:1430`) and the UI token; the UI token is kept in memory and is never read by this MCP adapter. On initial connect, New, or Open, the UI registers a project with the service. When opening an existing project ID, the service copy is authoritative and the UI warns if its content differs from the local copy.
 
-While connected, the UI polls every two seconds. Network failures and revision conflicts block connected edits until the user refreshes or recovers; a response lost after a write is not replayed automatically, so refresh before retrying. Use **Review agent requests** in the status bar to inspect and decide pending operations. The dialog shows the action, scenario, revision and expiry, with individual changes and request arguments expandable on demand; closing it leaves the request pending. Saving checkpoints the authoritative service snapshot. Disconnecting returns to standalone mode with a new local history.
+While connected, the UI polls every two seconds and serializes service requests so a poll cannot reject a concurrent user edit. Network failures and revision conflicts block connected edits until the user refreshes or recovers; a response lost after a write is not replayed automatically, so refresh before retrying. Use **Review agent requests** in the status bar to inspect and decide pending operations. The dialog shows the action, scenario, revision and expiry, with individual changes and request arguments expandable on demand; closing it leaves the request pending. Saving checkpoints the authoritative service snapshot. Disconnecting returns to standalone mode with a new local history.
 
 Connected CSV imports use the UI-only `replaceDocument` compare-and-swap flow; arbitrary callback candidates are not applied locally. Graph layout and drag changes use the bounded activity-patch command.
 

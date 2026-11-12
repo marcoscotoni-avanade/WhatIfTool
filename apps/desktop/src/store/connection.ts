@@ -32,6 +32,7 @@ export function createConnection(store: StoreApi<PlannerState>, fetcher: typeof 
   const original = { ...store.getState() };
   let token = '', projectId = '', timer: ReturnType<typeof setInterval> | undefined;
   let outstanding: Promise<unknown> = Promise.resolve();
+  let pendingRequests = 0;
   let snapshotKey = '';
   const connected = () => state.getState().mode === 'connected';
   const fail = (error: unknown) => {
@@ -77,19 +78,25 @@ export function createConnection(store: StoreApi<PlannerState>, fetcher: typeof 
     const approvals = await request<Approval[]>(`/${encodeURIComponent(projectId)}/operations`);
     state.setState({ approvals, error: undefined });
   }
-  function run<T>(work: () => Promise<T>): Promise<T | false> {
-    if (state.getState().busy) { fail(new Error('A service request is still in progress. Wait before retrying.')); return Promise.resolve(false); }
+  function run<T>(work: () => Promise<T>, allowRecovery = false): Promise<T | false> {
+    pendingRequests++;
     state.setState({ busy: true });
-    const task = work().catch(error => { fail(error); return false as const; })
-      .finally(() => state.setState({ busy: false }));
+    const task = outstanding.then(async () => {
+      if (state.getState().error && !allowRecovery) return false as const;
+      return work();
+    }).catch(error => { fail(error); return false as const; })
+      .finally(() => {
+        pendingRequests--;
+        if (pendingRequests === 0) state.setState({ busy: false });
+      });
     outstanding = task;
     return task;
   }
   const commandPath = () => `/${encodeURIComponent(projectId)}/commands`;
   function replaceDocument(name: string, mutate: (model: ProjectModel) => ProjectModel): boolean {
     if (state.getState().error) { fail(new Error('Service is blocked. Refresh to recover before retrying.')); return false; }
-    const current = store.getState();
     return run(async () => {
+      const current = store.getState();
       const candidate = mutate(structuredClone(toModel(current.document)));
       const snapshot = await request<RemoteSnapshot>(commandPath(), 'POST', {
         expectedRevision: state.getState().revision, operationId: crypto.randomUUID(), action: 'replaceDocument',
@@ -105,10 +112,10 @@ export function createConnection(store: StoreApi<PlannerState>, fetcher: typeof 
     const remote = (...args: unknown[]) => {
       if (!connected()) return local(...args);
       if (state.getState().error) { fail(new Error('Service is blocked. Refresh to recover before retrying.')); return false; }
-      const current = store.getState(), scenarioId = current.activeScenarioId;
-      const selection = { activityIds: [...current.selectedActivityIds], dependencyId: current.selectedDependencyId };
-      const previousIds = new Set(resolveScenario(toModel(current.document), scenarioId).activities.map(activity => activity.id));
       return run(async () => {
+        const current = store.getState(), scenarioId = current.activeScenarioId;
+        const selection = { activityIds: [...current.selectedActivityIds], dependencyId: current.selectedDependencyId };
+        const previousIds = new Set(resolveScenario(toModel(current.document), scenarioId).activities.map(activity => activity.id));
         const snapshot = await request<RemoteSnapshot>(commandPath(), 'POST', {
           expectedRevision: state.getState().revision, operationId: crypto.randomUUID(), action, args, scenarioId, selection,
         });
@@ -186,7 +193,7 @@ export function createConnection(store: StoreApi<PlannerState>, fetcher: typeof 
       store.setState({ history: [], future: [], dirty: true });
       state.setState({ mode: 'standalone', busy: false, revision: undefined, approvals: [], error: undefined });
     },
-    refresh: () => run(refresh),
+    refresh: () => run(refresh, true),
     listProjects: () => request<{ id: string; name: string; revision: number }[]>(''),
     listImports: () => request<ImportApproval[]>('', 'GET', undefined, '/api/imports'),
     decideImport: (id: string, approve: boolean) => request<ImportApproval>(`/${encodeURIComponent(id)}/decision`, 'POST', { approve }, '/api/imports'),
