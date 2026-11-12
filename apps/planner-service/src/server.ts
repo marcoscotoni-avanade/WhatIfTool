@@ -2,10 +2,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { timingSafeEqual } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { z } from 'zod';
-import { parseProject } from '@planner/domain';
+import { parseProject, type CalculationResults } from '@planner/domain';
+import { resolveScenario } from '@planner/scenarios';
 import { PlannerService, snapshot, type Actor } from './planner';
 import { ServiceError } from './contracts';
 import { FileProjectRepository } from './repository';
+import { activityQuerySchema, queryActivities } from './activity-query';
+import { dependencyQuerySchema, diagnosticQuerySchema, diagnose, queryDependencies } from './analysis-query';
+import { ImportQueue } from './imports';
 
 export interface ServerOptions {
   directory: string; uiToken: string; agentToken: string; port?: number;
@@ -54,6 +58,8 @@ export async function createPlannerServer(options: ServerOptions) {
   const repository = new FileProjectRepository(options.directory);
   await repository.initialize();
   const service = new PlannerService(repository);
+  const imports = new ImportQueue(options.directory, service);
+  await imports.initialize();
   const origins = new Set(options.origins ?? ['http://127.0.0.1:1420', 'http://127.0.0.1:1421', 'http://tauri.localhost', 'https://tauri.localhost', 'tauri://localhost']);
   const streams = new Set<ServerResponse>();
   const server = createServer((request, response) => {
@@ -75,6 +81,26 @@ export async function createPlannerServer(options: ServerOptions) {
         : (() => { throw new ServiceError(401, 'UNAUTHORIZED', 'A valid bearer token is required.'); })();
       const url = new URL(request.url ?? '/', `http://127.0.0.1:${port}`);
       if (url.pathname === '/api/health' && request.method === 'GET') { send(response, { status: 'ready', protocol: 1 }); return; }
+      if (url.pathname === '/api/imports') {
+        if (request.method === 'GET') {
+          if (actor !== 'ui') throw new ServiceError(403, 'FORBIDDEN', 'Only the UI may list import approvals.');
+          send(response, imports.list()); return;
+        }
+        if (request.method === 'POST') {
+          if (actor !== 'agent') throw new ServiceError(403, 'FORBIDDEN', 'Only an agent may request an import.');
+          const input = z.object({ model: z.record(z.string(), z.unknown()), operationId: z.string().min(1).max(128) }).strict().parse(await body(request));
+          send(response, await imports.request(input.model, input.operationId)); return;
+        }
+      }
+      const importRoute = /^\/api\/imports\/([\w-]+)(\/decision)?$/.exec(url.pathname);
+      if (importRoute) {
+        if (importRoute[2] && request.method === 'POST') {
+          if (actor !== 'ui') throw new ServiceError(403, 'FORBIDDEN', 'Agent credentials cannot approve imports.');
+          const input = z.object({ approve: z.boolean() }).strict().parse(await body(request));
+          send(response, await imports.decide(importRoute[1]!, input.approve)); return;
+        }
+        if (!importRoute[2] && request.method === 'GET') { send(response, imports.get(importRoute[1]!)); return; }
+      }
       if (url.pathname === '/api/projects') {
         if (request.method === 'GET') { send(response, await repository.list()); return; }
         if (request.method === 'POST') {
@@ -90,7 +116,95 @@ export async function createPlannerServer(options: ServerOptions) {
       if (!match) throw new ServiceError(404, 'NOT_FOUND', 'Route not found.');
       const id = match[1]!, route = match[2] ?? '';
       if (!route && request.method === 'GET') { send(response, snapshot(await service.get(id))); return; }
-      if (route === 'commands' && request.method === 'POST') { send(response, await service.execute(id, await body(request), actor)); return; }
+      if ((route === 'dependencies/query' || route === 'diagnose') && request.method === 'POST') {
+        const record = await service.get(id);
+        const raw = await body(request);
+        if (route === 'dependencies/query') {
+          const input = dependencyQuerySchema.parse(raw);
+          if (input.scenarioId && !record.model.scenarios.some(scenario => scenario.id === input.scenarioId))
+            throw new ServiceError(404, 'SCENARIO_NOT_FOUND', 'Scenario not found.');
+          const resolved = resolveScenario(record.model, input.scenarioId ?? undefined);
+          if (input.traversal && !resolved.activities.some(activity => activity.id === input.traversal!.activityId))
+            throw new ServiceError(404, 'ACTIVITY_NOT_FOUND', 'Traversal activity not found.');
+          const result = input.analyze ? await calculate({ model: record.model, scenarioId: input.scenarioId ?? undefined, compare: false }) as CalculationResults : undefined;
+          send(response, { projectId: id, ...queryDependencies(resolved, input, result), revision: record.revision }); return;
+        }
+        const input = diagnosticQuerySchema.parse(raw);
+        if (input.scenarioId && !record.model.scenarios.some(scenario => scenario.id === input.scenarioId))
+          throw new ServiceError(404, 'SCENARIO_NOT_FOUND', 'Scenario not found.');
+        const resolved = resolveScenario(record.model, input.scenarioId ?? undefined);
+        if (input.milestoneId && !resolved.activities.some(activity => activity.id === input.milestoneId && activity.type === 'MILESTONE'))
+          throw new ServiceError(404, 'MILESTONE_NOT_FOUND', 'Milestone not found.');
+        const result = await calculate({ model: record.model, scenarioId: input.scenarioId ?? undefined, milestoneId: input.milestoneId, compare: false }) as CalculationResults;
+        const issues = diagnose(resolved, result, input.milestoneId);
+        const counts = { error: issues.filter(issue => issue.severity === 'error').length,
+          warning: issues.filter(issue => issue.severity === 'warning').length, info: issues.filter(issue => issue.severity === 'info').length };
+        send(response, { projectId: id, scenarioId: input.scenarioId, revision: record.revision, counts,
+          total: issues.length, limit: input.limit, offset: input.offset, items: issues.slice(input.offset, input.offset + input.limit) }); return;
+      }
+      if (route === 'metadata' && request.method === 'POST') {
+        const input = z.object({ scenarioId: z.string().min(1).nullable(),
+          kind: z.enum(['team', 'tags', 'calendars', 'calendar']),
+          calendarId: z.string().min(1).optional(), limit: z.number().int().min(1).max(100).optional(),
+          offset: z.number().int().nonnegative().optional() }).strict().parse(await body(request));
+        const record = await service.get(id);
+        if (input.scenarioId && !record.model.scenarios.some(scenario => scenario.id === input.scenarioId))
+          throw new ServiceError(404, 'SCENARIO_NOT_FOUND', 'Scenario not found.');
+        const resolved = resolveScenario(record.model, input.scenarioId ?? undefined);
+        const base = { projectId: id, scenarioId: input.scenarioId, revision: record.revision };
+        if (input.kind === 'team') { send(response, { ...base, team: resolved.project.team ?? null }); return; }
+        if (input.kind === 'tags') { send(response, { ...base, tags: resolved.project.tagCatalog ?? [] }); return; }
+        if (input.kind === 'calendar') {
+          if (!input.calendarId) throw new ServiceError(400, 'INVALID_INPUT', 'calendarId is required.');
+          const calendar = resolved.calendars.find(item => item.id === input.calendarId);
+          if (!calendar) throw new ServiceError(404, 'CALENDAR_NOT_FOUND', 'Calendar not found.');
+          send(response, { ...base, calendar }); return;
+        }
+        if (input.limit === undefined || input.offset === undefined) throw new ServiceError(400, 'INVALID_INPUT', 'Pagination is required.');
+        const calendars = [...resolved.calendars].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+        send(response, { ...base, items: calendars.slice(input.offset, input.offset + input.limit),
+          total: calendars.length, limit: input.limit, offset: input.offset }); return;
+      }
+      if (route === 'duration-proposal' && request.method === 'POST') {
+        const input = z.object({ scenarioId: z.string().min(1).nullable() }).strict().parse(await body(request));
+        const record = await service.get(id), pending = record.pendingEdit;
+        if (input.scenarioId && !record.model.scenarios.some(scenario => scenario.id === input.scenarioId))
+          throw new ServiceError(404, 'SCENARIO_NOT_FOUND', 'Scenario not found.');
+        if (pending && (pending.scenarioId ?? null) !== input.scenarioId)
+          throw new ServiceError(409, 'SCENARIO_MISMATCH', 'The duration proposal belongs to another scenario.');
+        send(response, { projectId: id, revision: record.revision, scenarioId: input.scenarioId,
+          proposal: pending ? { id: pending.id, name: pending.name, revision: pending.revision, proposals: pending.proposals } : null }); return;
+      }
+      if (route === 'activities/query' && request.method === 'POST') {
+        const input = activityQuerySchema.parse(await body(request));
+        const record = await service.get(id);
+        if (input.scenarioId && !record.model.scenarios.some(scenario => scenario.id === input.scenarioId))
+          throw new ServiceError(404, 'SCENARIO_NOT_FOUND', 'Scenario not found.');
+        const scenarioId = input.scenarioId ?? undefined;
+        const resolved = resolveScenario(record.model, scenarioId);
+        const needsCalculation = input.date?.field === 'calculatedStart' || input.date?.field === 'calculatedFinish';
+        const result = needsCalculation ? await calculate({ model: record.model, scenarioId, compare: false }) as CalculationResults : undefined;
+        send(response, { projectId: id, ...queryActivities(resolved, input, result), revision: record.revision }); return;
+      }
+      if (route === 'commands' && request.method === 'POST') {
+        const command = await body(request);
+        try { send(response, await service.execute(id, command, actor)); }
+        catch (error) { await service.recordCommandFailure(id, command, actor, error); throw error; }
+        return;
+      }
+      if (route === 'history/query' && request.method === 'POST') {
+        const input = z.object({ limit: z.number().int().min(1).max(100), offset: z.number().int().nonnegative(),
+          from: z.iso.datetime({ offset: true }).optional(), to: z.iso.datetime({ offset: true }).optional(),
+          actor: z.enum(['ui', 'agent', 'system']).optional(), action: z.string().min(1).optional(), outcome: z.string().min(1).optional() }).strict()
+          .refine(value => !value.from || !value.to || Date.parse(value.from) <= Date.parse(value.to), 'Date bounds are reversed.').parse(await body(request));
+        const record = await service.get(id);
+        const items = record.audit.filter(item => (!input.from || Date.parse(item.at) >= Date.parse(input.from))
+          && (!input.to || Date.parse(item.at) <= Date.parse(input.to)) && (!input.actor || item.actor === input.actor)
+          && (!input.action || item.action === input.action) && (!input.outcome || item.outcome === input.outcome))
+          .reverse().map(({ at, actor, action, revision, operationId, outcome }) => ({ at, actor, action, revision, operationId, outcome }));
+        send(response, { projectId: id, revision: record.revision, retentionLimit: 1000, total: items.length,
+          limit: input.limit, offset: input.offset, items: items.slice(input.offset, input.offset + input.limit) }); return;
+      }
       if (route === 'preview' && request.method === 'POST') { send(response, await service.preview(id, await body(request), actor)); return; }
       if (route === 'events' && request.method === 'GET') {
         const record = await service.get(id);
@@ -104,8 +218,7 @@ export async function createPlannerServer(options: ServerOptions) {
         return;
       }
       if (route === 'operations' && request.method === 'GET') {
-        const record = await service.get(id);
-        send(response, record.approvals.map(op => ({ ...op, status: op.status === 'pending' && Date.parse(op.expiresAt) < Date.now() ? 'expired' : op.status })));
+        send(response, await service.expireApprovals(id));
         return;
       }
       const operation = /^operations\/([\w-]+)(\/decision)?$/.exec(route);
@@ -116,9 +229,9 @@ export async function createPlannerServer(options: ServerOptions) {
           send(response, await service.decide(id, operation[1]!, input.approve)); return;
         }
         if (!operation[2] && request.method === 'GET') {
-          const found = (await service.get(id)).approvals.find(op => op.id === operation[1]);
+          const found = (await service.expireApprovals(id)).find(op => op.id === operation[1]);
           if (!found) throw new ServiceError(404, 'NOT_FOUND', 'Operation not found.');
-          send(response, { ...found, status: found.status === 'pending' && Date.parse(found.expiresAt) < Date.now() ? 'expired' : found.status }); return;
+          send(response, found); return;
         }
       }
       if (['calculate', 'compare'].includes(route) && request.method === 'POST') {

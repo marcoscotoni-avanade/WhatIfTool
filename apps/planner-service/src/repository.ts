@@ -16,6 +16,7 @@ export interface Approval {
 }
 export interface ProjectRecord {
   model: ProjectModel; revision: number; dirty: boolean; activeScenarioId?: string; pendingEdit?: PendingEdit;
+  importId?: string;
   history: SavedCommand[]; future: SavedCommand[];
   approvals: Approval[];
   operations: { id: string; hash: string; actor: string; revision: number; approvalId?: string }[];
@@ -25,7 +26,14 @@ export async function atomicJson(path: string, value: unknown): Promise<void> {
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, JSON.stringify(value), { mode: 0o600, flag: 'wx', flush: true });
-    await rename(temporary, path);
+    for (let attempt = 0; ; attempt++) {
+      try { await rename(temporary, path); break; }
+      catch (error) {
+        const code = error instanceof Error && 'code' in error ? error.code : undefined;
+        if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(String(code)) || attempt >= 7) throw error;
+        await new Promise(resolve => setTimeout(resolve, Math.min(30 * 2 ** attempt, 250)));
+      }
+    }
   } catch (error) {
     await rm(temporary, { force: true });
     throw error;
@@ -38,7 +46,17 @@ export class FileProjectRepository {
     if (!/^[\w-]{1,128}$/.test(id)) throw new Error('Invalid project ID.');
     return join(this.directory, `${id}.json`);
   }
-  async initialize() { await mkdir(this.directory, { recursive: true, mode: 0o700 }); }
+  async initialize() {
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    for (const file of await readdir(this.directory)) {
+      if (!file.endsWith('.json')) continue;
+      const record = await this.read(file.slice(0, -5));
+      if (record?.pendingEdit && !record.pendingEdit.id) {
+        record.pendingEdit.id = randomUUID();
+        await this.write(record);
+      }
+    }
+  }
   async read(id: string): Promise<ProjectRecord | undefined> {
     try { return JSON.parse(await readFile(this.path(id), 'utf8')) as ProjectRecord; }
     catch (error) {

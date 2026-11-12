@@ -71,6 +71,49 @@ export class PlannerClient {
     });
   }
 
+  queryActivities(projectId: string, input: unknown): Promise<unknown> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/activities/query`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  getDurationProposal(projectId: string, scenarioId: string | null): Promise<unknown> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/duration-proposal`, {
+      method: 'POST',
+      body: JSON.stringify({ scenarioId }),
+    });
+  }
+
+  getMetadata(projectId: string, input: unknown): Promise<unknown> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/metadata`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  queryAnalysis(projectId: string, route: 'dependencies/query' | 'diagnose', input: unknown): Promise<unknown> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/${route}`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  queryHistory(projectId: string, input: unknown): Promise<unknown> {
+    return this.request(`/api/projects/${encodeURIComponent(projectId)}/history/query`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  requestImport(model: unknown, operationId: string): Promise<unknown> {
+    return this.request('/api/imports', { method: 'POST', body: JSON.stringify({ model, operationId }) });
+  }
+
+  getImport(id: string): Promise<unknown> {
+    return this.request(`/api/imports/${encodeURIComponent(id)}`);
+  }
+
   command(projectId: string, command: CommandRequest): Promise<unknown> {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/commands`, {
       method: 'POST',

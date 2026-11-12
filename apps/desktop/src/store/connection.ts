@@ -12,6 +12,11 @@ export interface Approval {
   expectedRevision: number; expiresAt: string;
   diff?: { target: string; id: string; before?: unknown; after?: unknown }[];
 }
+export interface ImportApproval {
+  id: string; operationId: string; status: string; expiresAt: string; hash: string; reason?: string;
+  projectId: string; name: string;
+  counts: { activities: number; dependencies: number; scenarios: number; baselines: number; calendars: number };
+}
 export interface ConnectionState {
   mode: 'standalone' | 'connected'; url: string; busy: boolean;
   error?: string; revision?: number; approvals: Approval[];
@@ -33,8 +38,8 @@ export function createConnection(store: StoreApi<PlannerState>, fetcher: typeof 
     const text = error instanceof Error ? error.message : String(error);
     state.setState({ error: text }); store.getState().report(text);
   };
-  async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-    const response = await fetcher(`${state.getState().url}/api/projects${path}`, {
+  async function request<T>(path: string, method = 'GET', body?: unknown, prefix = '/api/projects'): Promise<T> {
+    const response = await fetcher(`${state.getState().url}${prefix}${path}`, {
       method, headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       signal: AbortSignal.timeout(15_000),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -183,6 +188,8 @@ export function createConnection(store: StoreApi<PlannerState>, fetcher: typeof 
     },
     refresh: () => run(refresh),
     listProjects: () => request<{ id: string; name: string; revision: number }[]>(''),
+    listImports: () => request<ImportApproval[]>('', 'GET', undefined, '/api/imports'),
+    decideImport: (id: string, approve: boolean) => request<ImportApproval>(`/${encodeURIComponent(id)}/decision`, 'POST', { approve }, '/api/imports'),
     openProject: (id: string) => run(async () => {
       if (store.getState().pendingEdit) throw new Error('Complete or cancel the pending duration proposal first.');
       const snapshot = await request<RemoteSnapshot>(`/${encodeURIComponent(id)}`);

@@ -92,10 +92,10 @@ describe('MCP server stdio integration', () => {
     const listed = await client.listTools();
     const names = listed.tools.map(tool => tool.name).sort();
     expect(names).toEqual([
-      'analyze_milestone', 'apply_changes', 'calculate_schedule', 'compare_scenarios', 'create_scenario',
-      'explain_risk', 'export_project', 'get_activity', 'get_operation_status', 'get_project',
-      'list_activities', 'list_projects', 'list_scenarios', 'preview_changes', 'request_delete',
-      'request_manage_baseline', 'request_publish_baseline',
+      'analyze_dependencies', 'analyze_milestone', 'apply_changes', 'calculate_schedule', 'compare_scenarios', 'create_scenario', 'diagnose_plan',
+      'explain_risk', 'export_project', 'get_activity', 'get_calendar', 'get_duration_proposal', 'get_import_status', 'get_operation_status', 'get_project',
+      'get_tag_catalog', 'get_team', 'list_activities', 'list_calendars', 'list_dependencies', 'list_operation_history', 'list_projects', 'list_scenarios', 'preview_changes', 'request_delete',
+      'rename_scenario', 'request_import_project', 'request_manage_baseline', 'request_publish_baseline', 'resolve_duration_proposal', 'set_tag_catalog', 'update_team', 'upsert_calendar',
     ].sort());
 
     const projects = await client.callTool({ name: 'list_projects', arguments: { limit: 1, offset: 1 } });
@@ -221,6 +221,11 @@ describe('MCP server stdio integration', () => {
     const scenario = scenarioData.items.find((item: { name: string }) => item.name === 'Agent what-if');
     expect(scenario).toBeDefined();
     expect(scenarioData.revision).toBe(1);
+    const calendars = await client.callTool({ name: 'list_calendars', arguments: { projectId, scenarioId: scenario.id, limit: 10, offset: 0 } });
+    expect(calendars.structuredContent).toMatchObject({ data: { total: 1, items: [{ id: 'standard' }], revision: 1 } });
+    const diagnostics = await client.callTool({ name: 'diagnose_plan', arguments: { projectId, scenarioId: scenario.id, limit: 10, offset: 0 } });
+    expect(diagnostics.isError, JSON.stringify(diagnostics.content)).toBeUndefined();
+    expect(diagnostics.structuredContent).toMatchObject({ data: { revision: 1, total: 0 } });
 
     const applied = await client.callTool({
       name: 'apply_changes',
@@ -239,8 +244,67 @@ describe('MCP server stdio integration', () => {
     expect(scenarioActivities.structuredContent).toMatchObject({
       data: { items: [{ code: 'MCP-001', name: 'Agent activity', duration: 2 }], total: 1, revision: 2 },
     });
+    const filtered = await client.callTool({
+      name: 'list_activities',
+      arguments: { projectId, scenarioId: scenario.id, limit: 10, offset: 0, text: 'AGENT' },
+    });
+    expect(filtered.structuredContent).toMatchObject({ data: { total: 1, revision: 2 } });
+    const renamed = await client.callTool({
+      name: 'rename_scenario',
+      arguments: { projectId, scenarioId: scenario.id, name: 'Renamed', expectedRevision: 2, operationId: 'rename-live-test' },
+    });
+    expect(renamed.isError, JSON.stringify(renamed.content)).toBeUndefined();
+    expect(renamed.structuredContent).toMatchObject({ data: { result: { revision: 3 } } });
+    const activityId = (scenarioActivities.structuredContent as any).data.items[0].id as string;
+    const proposalWrite = await client.callTool({ name: 'apply_changes', arguments: {
+      projectId, scenarioId: scenario.id, expectedRevision: 3, operationId: 'proposal-live-test',
+      changes: { activities: [{ id: activityId, patch: { effortHours: 16 } }] },
+    } });
+    expect(proposalWrite.isError, JSON.stringify(proposalWrite.content)).toBeUndefined();
+    const pendingProposal = await client.callTool({ name: 'get_duration_proposal', arguments: { projectId, scenarioId: scenario.id } });
+    expect(pendingProposal.structuredContent).toMatchObject({ data: { revision: 4, proposal: { id: expect.any(String) } } });
+    const proposalId = (pendingProposal.structuredContent as any).data.proposal.id as string;
+    const resolution = await client.callTool({ name: 'resolve_duration_proposal', arguments: {
+      projectId, scenarioId: scenario.id, expectedRevision: 4, operationId: 'resolve-live-test',
+      proposalId, resolution: 'apply_selected', activityIds: [activityId],
+    } });
+    expect(resolution.isError, JSON.stringify(resolution.content)).toBeUndefined();
+    expect(resolution.structuredContent).toMatchObject({ data: { result: { revision: 5 } } });
+    const history = await client.callTool({ name: 'list_operation_history', arguments: { projectId, limit: 10, offset: 0, actor: 'agent' } });
+    expect(history.structuredContent).toMatchObject({ data: { retentionLimit: 1000, items: expect.arrayContaining([expect.objectContaining({ action: 'finishEdit' })]) } });
+    const tagUpdate = await client.callTool({ name: 'set_tag_catalog', arguments: {
+      projectId, scenarioId: scenario.id, expectedRevision: 5, operationId: 'tags-live', tags: ['Important'],
+    } });
+    expect(tagUpdate.isError, JSON.stringify(tagUpdate.content)).toBeUndefined();
+    const tags = await client.callTool({ name: 'get_tag_catalog', arguments: { projectId, scenarioId: scenario.id } });
+    expect(tags.structuredContent).toMatchObject({ data: { revision: 6, tags: ['Important'] } });
+    const teamUpdate = await client.callTool({ name: 'update_team', arguments: {
+      projectId, scenarioId: scenario.id, expectedRevision: 6, operationId: 'team-live',
+      team: { name: 'Team', calendarId: 'standard', members: [{ id: 'alice', name: 'Alice', allocationPercent: 100 }] },
+    } });
+    expect(teamUpdate.isError, JSON.stringify(teamUpdate.content)).toBeUndefined();
+    const team = await client.callTool({ name: 'get_team', arguments: { projectId, scenarioId: scenario.id } });
+    expect(team.structuredContent).toMatchObject({ data: { revision: 7, team: { members: [{ id: 'alice' }] } } });
+    const calendarUpdate = await client.callTool({ name: 'upsert_calendar', arguments: {
+      projectId, scenarioId: scenario.id, expectedRevision: 7, operationId: 'calendar-live',
+      calendar: { ...importedCalendar(), id: 'alternate' },
+    } });
+    expect(calendarUpdate.isError, JSON.stringify(calendarUpdate.content)).toBeUndefined();
+    const calendar = await client.callTool({ name: 'get_calendar', arguments: { projectId, scenarioId: scenario.id, calendarId: 'alternate' } });
+    expect(calendar.structuredContent).toMatchObject({ data: { revision: 8, calendar: { id: 'alternate' } } });
+    const dependencies = await client.callTool({ name: 'analyze_dependencies', arguments: { projectId, scenarioId: scenario.id, limit: 10, offset: 0 } });
+    expect(dependencies.isError, JSON.stringify(dependencies.content)).toBeUndefined();
+    expect(dependencies.structuredContent).toMatchObject({ data: { revision: 8, total: 0 } });
+    const importedModel = createProject('Imported via MCP');
+    const imported = await client.callTool({ name: 'request_import_project', arguments: { operationId: 'import-live', model: importedModel } });
+    expect(imported.isError, JSON.stringify(imported.content)).toBeUndefined();
+    expect(imported.structuredContent).toMatchObject({ data: { projectId: importedModel.project.id, status: 'pending' } });
+    const importId = (imported.structuredContent as any).data.id as string;
+    await ui(`/api/imports/${importId}/decision`, { method: 'POST', body: JSON.stringify({ approve: true }) });
+    const importStatus = await client.callTool({ name: 'get_import_status', arguments: { importId } });
+    expect(importStatus.structuredContent).toMatchObject({ data: { status: 'approved' } });
     const backend = await ui(`/api/projects/${projectId}`);
-    expect(backend.revision).toBe(2);
+    expect(backend.revision).toBe(8);
     expect(backend.model.activities).toEqual([]);
     expect(backend.model.overrides).toContainEqual(expect.objectContaining({
       scenarioId: scenario.id,
@@ -251,6 +315,11 @@ describe('MCP server stdio integration', () => {
   });
 });
 
+function importedCalendar() {
+  return { name: 'Alternate', workingDays: [1, 2, 3, 4, 5], workingIntervals: [{ start: '09:00', end: '17:00' }],
+    holidays: [], exceptions: [] };
+}
+
 function route(request: IncomingMessage, response: ServerResponse, body: any): void {
   if (request.url === '/api/projects') return send(response, 200, [
     { id: 'p-1', name: 'Test Project', revision: 7 },
@@ -258,6 +327,9 @@ function route(request: IncomingMessage, response: ServerResponse, body: any): v
   ]);
   if (request.url === '/api/projects/p-1') return send(response, 200, {
     model, revision: 7, activeScenarioId: 's-1', dirty: true, canUndo: true, canRedo: false,
+  });
+  if (request.url === '/api/projects/p-1/activities/query') return send(response, 200, {
+    items: model.activities, total: 1, revision: 7, scenarioId: body.scenarioId, limit: body.limit, offset: body.offset,
   });
   if (request.url === '/api/projects/p-1/commands') return send(response, 200, {
     status: 'approval_required', operation: { id: body.operationId },

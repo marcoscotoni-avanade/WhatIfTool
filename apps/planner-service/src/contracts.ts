@@ -12,7 +12,7 @@ export const commandSchema = z.object({
   operationId: z.string().min(1).max(128),
   action: z.enum(['updateEntity', 'updateActivities', 'updateActivityPatches', 'pasteActivities',
     'addActivity', 'duplicateSelection', 'deleteSelection', 'connect', 'newScenario', 'renameScenario',
-    'removeScenario', 'baseline', 'manageBaseline', 'finishEdit', 'undo', 'redo', 'setTagCatalog', 'applyChanges', 'saveCompleted', 'replaceDocument']),
+    'removeScenario', 'baseline', 'manageBaseline', 'finishEdit', 'undo', 'redo', 'setTagCatalog', 'upsertCalendar', 'applyChanges', 'saveCompleted', 'replaceDocument']),
   args: z.array(z.unknown()).max(10),
   scenarioId: z.string().optional(),
   selection: z.object({ activityIds: z.array(z.string()).max(1000), dependencyId: z.string().optional() }).strict().optional(),

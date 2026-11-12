@@ -4,6 +4,7 @@ import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createPlannerServer } from '../../apps/planner-service/src/server';
 import type { RemoteSnapshot } from '../../apps/desktop/src/store/connection';
+import { createProject } from '@planner/domain';
 
 test('real connected UI approves an agent edit and publishes UI edits to the authoritative service', async ({ page }) => {
   test.setTimeout(60_000);
@@ -62,9 +63,47 @@ test('real connected UI approves an agent edit and publishes UI edits to the aut
     await expect(nameCell).toHaveText(uiName);
     await expect.poll(async () => (await agentRead<RemoteSnapshot>(route)).model.activities.find(activity => activity.id === activityId)!.name).toBe(uiName);
     await expect(page.getByRole('button', { name: 'Connected · r2', exact: true })).toBeVisible();
+    await expect(status).toContainText('live polling');
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(page.getByText('Authoritative project snapshot exported locally.', { exact: true })).toBeVisible();
     await expect.poll(async () => (await agentRead<RemoteSnapshot>(route)).dirty).toBe(false);
+    const makeProposal = await fetch(url + route + '/commands', {
+      method: 'POST', headers: { Authorization: `Bearer ${uiToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRevision: (await agentRead<RemoteSnapshot>(route)).revision, operationId: randomUUID(),
+        action: 'updateActivities', args: [[activityId], { effortHours: 88 }] }),
+    });
+    expect(makeProposal.ok).toBe(true);
+    const proposalSnapshot = await makeProposal.json() as RemoteSnapshot;
+    expect(proposalSnapshot.pendingEdit?.id).toBeTruthy();
+    const decisionRequest = await fetch(url + route + '/commands', {
+      method: 'POST', headers: { Authorization: `Bearer ${agentToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRevision: proposalSnapshot.revision, operationId: randomUUID(),
+        action: 'finishEdit', args: [[activityId], proposalSnapshot.pendingEdit!.id] }),
+    });
+    expect((await decisionRequest.json()).status).toBe('approval_required');
+    const dialog = page.getByRole('dialog', { name: 'Recalculate duration?' });
+    await expect(dialog.getByRole('region', { name: 'Agent duration request' })).toContainText('MIG');
+    await dialog.getByRole('button', { name: 'Approve agent decision' }).click();
+    await expect(dialog).toBeHidden();
+    await expect.poll(async () => (await agentRead<RemoteSnapshot>(route)).pendingEdit).toBeUndefined();
+    expect((await agentRead<RemoteSnapshot>(route)).model.activities.find(activity => activity.id === activityId)!.duration).toBe(11);
+    const newProject = createProject('Imported from agent');
+    const importRequest = await fetch(url + '/api/imports', {
+      method: 'POST', headers: { Authorization: `Bearer ${agentToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: newProject, operationId: randomUUID() }),
+    });
+    expect(importRequest.ok).toBe(true);
+    await page.getByRole('button', { name: /Connected · r/ }).click();
+    const connectionDialog = page.getByRole('dialog', { name: 'Local planning service' });
+    const importApproval = connectionDialog.getByRole('region', { name: 'Import Imported from agent' });
+    await expect(async () => {
+      await connectionDialog.getByRole('button', { name: 'List import requests' }).click();
+      await expect(importApproval).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 10_000 });
+    await expect(importApproval).toContainText('status: pending');
+    await importApproval.getByRole('button', { name: 'Approve import' }).click();
+    await expect(importApproval).toContainText('status: approved');
+    expect((await agentRead<RemoteSnapshot>(`/api/projects/${newProject.project.id}`)).model.project.name).toBe('Imported from agent');
     expect(errors).toEqual([]);
   } finally {
     await page.close();

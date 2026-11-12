@@ -87,8 +87,10 @@ function serialize(engine: Engine, record: ProjectRecord): ProjectRecord {
     name: entry.name, before: toModel(entry.undo()), after: toModel(entry.execute()),
     beforeScenarioId: entry.beforeScenarioId, afterScenarioId: entry.afterScenarioId,
   }));
+  const pendingEdit = state.pendingEdit
+    ? { ...state.pendingEdit, id: state.pendingEdit.id ?? randomUUID() } : undefined;
   return { ...record, model: toModel(state.document), dirty: state.dirty, activeScenarioId: state.activeScenarioId,
-    pendingEdit: state.pendingEdit, history: entries(state.history), future: entries(state.future) };
+    pendingEdit, history: entries(state.history), future: entries(state.future) };
 }
 export function snapshot(record: ProjectRecord) {
   const preservesBaselines = (model: ProjectModel | undefined) => !!model && record.model.baselines.every(baseline =>
@@ -150,6 +152,25 @@ export function dispatch(engine: Engine, input: PlannerCommand, actor: Actor) {
     }
     case 'pasteActivities': s.pasteActivities(z.tuple([z.array(z.record(z.string(), z.string())).max(1000)]).parse(args)[0]); break;
     case 'setTagCatalog': s.setTagCatalog(z.tuple([z.array(z.string()).max(1000)]).parse(args)[0]); break;
+    case 'upsertCalendar': {
+      const interval = z.object({ start: string, end: string }).strict();
+      const [calendar] = z.tuple([z.object({
+        id: string, name: string, workingDays: z.array(z.number().int()).max(7),
+        workingIntervals: z.array(interval).max(100), holidays: z.array(string).max(1000),
+        exceptions: z.array(z.object({ date: string, intervals: z.array(interval).max(100) }).strict()).max(1000),
+      }).strict()]).parse(args);
+      if (current.calendars.some(item => item.id === calendar.id)) {
+        const { id, ...changes } = calendar;
+        s.updateEntity('calendar', id, changes);
+      } else {
+        s.requestEdit('Create calendar', model => {
+          if (input.scenarioId) writeOverride(model, input.scenarioId, 'calendar', calendar.id, '$entity', calendar);
+          else model.calendars.push(calendar);
+          return model;
+        });
+      }
+      break;
+    }
     case 'addActivity': {
       const [milestone, position] = z.tuple([z.boolean().optional(), z.object({ x: z.number(), y: z.number() }).optional()]).parse([args[0], args[1]]);
       s.addActivity(milestone, position); break;
@@ -172,7 +193,16 @@ export function dispatch(engine: Engine, input: PlannerCommand, actor: Actor) {
     case 'renameScenario': s.renameScenario(z.tuple([string]).parse(args)[0]); break;
     case 'removeScenario': s.removeScenario(); break;
     case 'baseline': s.baseline(z.tuple([string]).parse(args)[0]); break;
-    case 'finishEdit': s.finishEdit(z.tuple([z.array(string).optional()]).parse([args[0]])[0]); break;
+    case 'finishEdit': {
+      const [selectedIds, proposalId] = z.tuple([z.array(string).optional(), string.optional()]).parse([args[0], args[1]]);
+      if (actor === 'agent') {
+        if (!s.pendingEdit || !proposalId || proposalId !== s.pendingEdit.id)
+          throw new ServiceError(409, 'PROPOSAL_MISMATCH', 'The duration proposal is missing or has changed.');
+        if (selectedIds?.some(id => !s.pendingEdit!.proposals.some(proposal => proposal.activityId === id && proposal.duration !== undefined && proposal.calendarId)))
+          throw new ServiceError(422, 'INVALID_PROPOSAL_SELECTION', 'Selected activities must have applicable duration proposals.');
+      }
+      s.finishEdit(selectedIds); break;
+    }
     case 'undo': s.undo(); break;
     case 'redo': s.redo(); break;
     case 'saveCompleted':
@@ -226,6 +256,19 @@ export class PlannerService {
       await this.persist(record); return snapshot(record);
     });
   }
+  registerImport(model: ProjectModel, importId: string) {
+    const normalized = parseProject(model); validateDocument(normalized);
+    return this.exclusive(normalized.project.id, async () => {
+      const existing = await this.repository.read(normalized.project.id);
+      if (existing) {
+        if (existing.importId === importId) return snapshot(existing);
+        throw new ServiceError(409, 'PROJECT_EXISTS', 'A project with this ID already exists.');
+      }
+      const record: ProjectRecord = { model: normalized, importId, revision: 0, dirty: false,
+        history: [], future: [], approvals: [], audit: [], operations: [] };
+      await this.persist(record); return snapshot(record);
+    });
+  }
   preview(id: string, raw: unknown, actor: Actor) {
     return this.exclusive(id, async () => {
       const input = commandSchema.parse(raw), record = await this.get(id);
@@ -240,6 +283,22 @@ export class PlannerService {
     if (actor === 'ui') return false;
     if (['baseline', 'manageBaseline', 'deleteSelection', 'removeScenario', 'undo', 'redo'].includes(input.action)) return true;
     if (input.action === 'newScenario') return !input.args[1] && !record.model.baselines.some(b => !b.archived);
+    const current = resolveScenario(record.model, input.scenarioId);
+    if (input.action === 'setTagCatalog') {
+      const tags = z.array(z.string()).parse(input.args[0]).map(tag => tag.trim().toLocaleLowerCase());
+      if ((current.project.tagCatalog ?? []).some(tag => !tags.includes(tag.toLocaleLowerCase()))) return true;
+    }
+    if (input.action === 'updateEntity' && input.args[0] === 'project') {
+      const changes = patch.parse(input.args[2]);
+      if (changes.tagCatalog !== undefined) {
+        const tags = z.array(z.string()).parse(changes.tagCatalog).map(tag => tag.trim().toLocaleLowerCase());
+        if ((current.project.tagCatalog ?? []).some(tag => !tags.includes(tag.toLocaleLowerCase()))) return true;
+      }
+      if (changes.team !== undefined) {
+        const team = z.object({ members: z.array(z.object({ id: string }).passthrough()) }).passthrough().parse(changes.team);
+        if ((current.project.team?.members ?? []).some(member => !team.members.some(item => item.id === member.id))) return true;
+      }
+    }
     return !input.scenarioId || (input.action === 'finishEdit' && !record.pendingEdit?.scenarioId);
   }
   execute(id: string, raw: unknown, actor: Actor) {
@@ -251,6 +310,12 @@ export class PlannerService {
         if (retried.approvalId) {
           const approval = record.approvals.find(op => op.id === retried.approvalId);
           if (!approval) throw new ServiceError(409, 'OPERATION_EXPIRED', 'Operation history expired. Reload the current project.');
+          if (approval.status === 'pending' && Date.parse(approval.expiresAt) < Date.now()) {
+            approval.status = 'expired';
+            record.audit = [...record.audit, { at: new Date().toISOString(), actor: 'system', action: approval.action,
+              revision: record.revision, operationId: input.operationId, outcome: 'expired' }].slice(-1000);
+            await this.persist(record);
+          }
           return { ...snapshot(record), status: approval.status === 'pending' ? 'approval_required' : approval.status, operation: approval, replayed: true };
         }
         return { ...snapshot(record), appliedRevision: retried.revision, replayed: true };
@@ -263,7 +328,7 @@ export class PlannerService {
           diff: describeChanges(record.model, engine.getState().pendingEdit?.model ?? toModel(engine.getState().document), input.scenarioId, engine.getState().activeScenarioId) };
         record.approvals = [...record.approvals, approval].slice(-200);
         record.operations = [...record.operations, { id: input.operationId, hash: digest, actor, revision: record.revision, approvalId: approval.id }].slice(-500);
-        record.audit.push({ at: new Date().toISOString(), actor, action: input.action, revision: record.revision, operationId: input.operationId, outcome: 'approval_required' });
+        record.audit = [...record.audit, { at: new Date().toISOString(), actor, action: input.action, revision: record.revision, operationId: input.operationId, outcome: 'approval_required' }].slice(-1000);
         await this.persist(record);
         return { status: 'approval_required', operation: approval };
       }
@@ -273,6 +338,37 @@ export class PlannerService {
       next.operations = [...record.operations, { id: input.operationId, hash: digest, actor, revision: next.revision }].slice(-500);
       next.audit = [...record.audit, { at: new Date().toISOString(), actor, action: input.action, revision: next.revision, operationId: input.operationId, outcome: next.pendingEdit ? 'duration_proposal' : 'committed' }].slice(-1000);
       await this.persist(next); return snapshot(next);
+    });
+  }
+  recordCommandFailure(id: string, raw: unknown, actor: Actor, error: unknown) {
+    const envelope = z.object({ action: commandSchema.shape.action.optional(),
+      operationId: z.string().min(1).max(128).optional() }).safeParse(raw);
+    const action = envelope.success ? envelope.data.action ?? 'invalid_command' : 'invalid_command';
+    const operationId = envelope.success ? envelope.data.operationId ?? randomUUID() : randomUUID();
+    return this.exclusive(id, async () => {
+      const record = await this.repository.read(id);
+      if (!record) return;
+      const outcome = error instanceof ServiceError ? `failed:${error.code}` : error instanceof z.ZodError
+        ? 'failed:INVALID_INPUT' : 'failed:INTERNAL_ERROR';
+      record.audit = [...record.audit, { at: new Date().toISOString(), actor, action,
+        revision: record.revision, operationId, outcome }].slice(-1000);
+      await this.persist(record);
+    });
+  }
+  expireApprovals(id: string) {
+    return this.exclusive(id, async () => {
+      const record = await this.get(id);
+      const expired = record.approvals.filter(approval => approval.status === 'pending' && Date.parse(approval.expiresAt) < Date.now());
+      if (expired.length) {
+        for (const approval of expired) {
+          approval.status = 'expired';
+          record.audit.push({ at: new Date().toISOString(), actor: 'system', action: approval.action,
+            revision: record.revision, operationId: approval.command.operationId, outcome: 'expired' });
+        }
+        record.audit = record.audit.slice(-1000);
+        await this.persist(record);
+      }
+      return record.approvals;
     });
   }
   decide(id: string, approvalId: string, approve: boolean) {

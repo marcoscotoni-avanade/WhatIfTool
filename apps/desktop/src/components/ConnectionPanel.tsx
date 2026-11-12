@@ -2,11 +2,13 @@ import { useState } from 'react';
 import { useStore } from 'zustand';
 import { connection, useProjectStore } from '../store/useProjectStore';
 import { Modal } from './shared';
+import type { ImportApproval } from '../store/connection';
 
 export function ConnectionPanel() {
   const c = useStore(connection.state), [open, setOpen] = useState(false);
   const [url, setUrl] = useState(c.url), [token, setToken] = useState('');
   const [projects, setProjects] = useState<{ id: string; name: string; revision: number }[]>([]);
+  const [imports, setImports] = useState<ImportApproval[]>([]);
   const [error, setError] = useState<string>();
   const attempt = async (action: () => unknown) => {
     try { setError(undefined); await action(); } catch (e) { setError(String(e)); }
@@ -25,8 +27,22 @@ export function ConnectionPanel() {
       </form> : <>
         <p>Connected to {c.url}. Changes are saved through the service. Polling every two seconds.</p>
         <button disabled={c.busy} onClick={() => void attempt(() => connection.refresh())}>Refresh / recover</button>
-        <button disabled={c.busy} onClick={() => void attempt(() => { connection.disconnect(); setProjects([]); })}>Disconnect to local copy</button>
+        <button disabled={c.busy} onClick={() => void attempt(() => { connection.disconnect(); setProjects([]); setImports([]); })}>Disconnect to local copy</button>
         <button disabled={c.busy} onClick={() => void attempt(async () => setProjects(await connection.listProjects()))}>List service projects</button>
+        <button disabled={c.busy} onClick={() => void attempt(async () => setImports(await connection.listImports()))}>List import requests</button>
+        {imports.map(item => <section key={item.id} aria-label={`Import ${item.name}`}>
+          <strong>Agent requests import: {item.name}</strong>
+          <p>Project ID: {item.projectId} · status: {item.status} · expires {item.expiresAt}</p>
+          {item.reason && <p role="alert">Import failed: {item.reason}</p>}
+          <p>{item.counts.activities} activities · {item.counts.dependencies} dependencies · {item.counts.scenarios} scenarios · {item.counts.baselines} baselines · {item.counts.calendars} calendars</p>
+          <p>SHA-256: {item.hash}</p>
+          {item.status === 'pending' && <><button disabled={c.busy} onClick={() => void attempt(async () => {
+            await connection.decideImport(item.id, true); setImports(await connection.listImports());
+          })}>Approve import</button>
+          <button disabled={c.busy} onClick={() => void attempt(async () => {
+            await connection.decideImport(item.id, false); setImports(await connection.listImports());
+          })}>Reject import</button></>}
+        </section>)}
         {projects.map(project => <button key={project.id} className="recent-item" disabled={c.busy} onClick={() => {
           void attempt(async () => { if (await connection.openProject(project.id)) setOpen(false); });
         }}>{project.name} · r{project.revision}</button>)}

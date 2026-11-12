@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { resolveScenario } from '@planner/scenarios';
 import type { ProjectModel } from '@planner/domain';
 import { PlannerHttpError, type PlannerClient, type CommandRequest, type ProjectResponse } from './client';
+import { activityQuerySchema } from '../../planner-service/src/activity-query';
+import { dependencyQuerySchema, diagnosticQuerySchema } from '../../planner-service/src/analysis-query';
 
 const pageInput = {
   limit: z.number().int().min(1).max(100),
@@ -38,18 +40,16 @@ const commandFor = (
   ...(selection ? { selection } : {}),
 });
 
-type ToolHandler = (input: any) => Promise<unknown>;
-
 export function registerPlannerTools(server: McpServer, planner: PlannerClient): void {
-  const register = (name: string, description: string, schema: z.ZodType, handler: ToolHandler, annotations?: Record<string, unknown>) => {
-    server.registerTool(name, {
+  const register = <T extends z.ZodType>(name: string, description: string, schema: T, handler: (input: z.infer<T>) => Promise<unknown>, annotations?: Record<string, unknown>) => {
+    server.registerTool<typeof outputSchema, z.ZodType>(name, {
       description,
       inputSchema: schema,
       outputSchema,
       annotations,
     }, async input => {
       try {
-        const data = await handler(input);
+        const data = await handler(schema.parse(input));
         return { content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: { data } };
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
@@ -78,21 +78,8 @@ export function registerPlannerTools(server: McpServer, planner: PlannerClient):
     };
   }, { readOnlyHint: true });
 
-  register('list_activities', 'List a page of activities for an explicit scenario, or null for the base project.', z.object({
-    ...projectIdInput, ...scenarioInput, ...pageInput,
-  }).strict(), async ({ projectId, scenarioId, limit, offset }) => {
-    const project = await planner.getProject(projectId);
-    const model = modelOf(project);
-    const snapshot = resolveScenario(model, scenarioId ?? undefined);
-    return {
-      items: snapshot.activities.slice(offset, offset + limit),
-      offset,
-      limit,
-      total: snapshot.activities.length,
-      revision: project.revision,
-      scenarioId,
-    };
-  }, { readOnlyHint: true });
+  register('list_activities', 'List activities from an explicit scenario or null for the draft, with optional combined filters. Date bounds are inclusive; tags match exactly.', activityQuerySchema.extend(projectIdInput), async ({ projectId, ...query }) =>
+    planner.queryActivities(projectId, query), { readOnlyHint: true });
 
   register('get_activity', 'Get one activity by id from an explicit scenario, or null for the base project.', z.object({
     ...projectIdInput, ...scenarioInput, activityId: z.string().min(1),
@@ -125,11 +112,88 @@ export function registerPlannerTools(server: McpServer, planner: PlannerClient):
       context.addIssue({ code: 'custom', path: ['scenarioId'], message: 'scenarioId is required when cloning a scenario.' });
     }
   });
-  register('create_scenario', 'Create a scenario. Set scenarioId to the explicit source when cloning; pass null when creating from the latest baseline.', createScenarioSchema, async input => {
+  register('create_scenario', 'Create a scenario. For clone=true, scenarioId is the source: a child inherits subsequent changes from its parent unless overridden. Pass null for a new scenario from the latest active baseline.', createScenarioSchema, async input => {
     const command = commandFor(input, 'newScenario', [input.name, input.clone]);
     const result = await planner.command(input.projectId, command);
     return { result, operationId: input.operationId };
   }, { readOnlyHint: false });
+
+  register('rename_scenario', 'Rename an editable scenario; published baselines cannot be renamed.', z.object({
+    ...writeInput, scenarioId: z.string().min(1), name: z.string().trim().min(1),
+  }).strict(), async input => {
+    const result = await planner.command(input.projectId, commandFor(input, 'renameScenario', [input.name]));
+    return { result, operationId: input.operationId, projectId: input.projectId, scenarioId: input.scenarioId };
+  }, { readOnlyHint: false });
+
+  register('get_duration_proposal', 'Get the pending duration proposal for an explicit scenario, or null for the draft.', z.object({
+    ...projectIdInput, ...scenarioInput,
+  }).strict(), async ({ projectId, scenarioId }) => planner.getDurationProposal(projectId, scenarioId), { readOnlyHint: true });
+
+  const durationResolution = z.discriminatedUnion('resolution', [
+    z.object({ ...writeInput, proposalId: z.string().min(1), resolution: z.literal('apply_selected'),
+      activityIds: z.array(z.string().min(1)).min(1).max(1000) }).strict(),
+    z.object({ ...writeInput, proposalId: z.string().min(1), resolution: z.enum(['keep_durations', 'cancel']) }).strict(),
+  ]);
+  register('resolve_duration_proposal', 'Resolve a matching proposal by applying selected calculated durations, keeping existing durations, or cancelling the pending edit. Draft changes require UI approval.', durationResolution, async input => {
+    const selected = input.resolution === 'apply_selected' ? input.activityIds : input.resolution === 'keep_durations' ? [] : null;
+    const result = await planner.command(input.projectId, commandFor(input, 'finishEdit', [selected, input.proposalId]));
+    return { result, operationId: input.operationId, projectId: input.projectId, scenarioId: input.scenarioId };
+  }, { readOnlyHint: false });
+
+  register('get_team', 'Read the team for an explicit scenario or draft.', z.object({ ...projectIdInput, ...scenarioInput }).strict(),
+    async ({ projectId, scenarioId }) => planner.getMetadata(projectId, { scenarioId, kind: 'team' }), { readOnlyHint: true });
+  register('get_tag_catalog', 'Read the tag catalog for an explicit scenario or draft.', z.object({ ...projectIdInput, ...scenarioInput }).strict(),
+    async ({ projectId, scenarioId }) => planner.getMetadata(projectId, { scenarioId, kind: 'tags' }), { readOnlyHint: true });
+  register('list_calendars', 'List a page of calendars for an explicit scenario or draft.', z.object({
+    ...projectIdInput, ...scenarioInput, ...pageInput,
+  }).strict(), async ({ projectId, ...input }) => planner.getMetadata(projectId, { ...input, kind: 'calendars' }), { readOnlyHint: true });
+  register('get_calendar', 'Read a calendar by ID for an explicit scenario or draft.', z.object({
+    ...projectIdInput, ...scenarioInput, calendarId: z.string().min(1),
+  }).strict(), async ({ projectId, ...input }) => planner.getMetadata(projectId, { ...input, kind: 'calendar' }), { readOnlyHint: true });
+  const teamSchema = z.object({ name: z.string().trim().min(1), calendarId: z.string().min(1),
+    members: z.array(z.object({ id: z.string().min(1), name: z.string().trim().min(1),
+      allocationPercent: z.number().min(0).max(100) }).strict()).max(1000) }).strict();
+  register('update_team', 'Replace the team. Assigned members cannot be removed; other member removals and draft writes require UI approval. Allocation changes may create duration proposals.', z.object({
+    ...writeInput, team: teamSchema,
+  }).strict(), async input => {
+    const result = await planner.command(input.projectId, commandFor(input, 'updateEntity', ['project', input.projectId, { team: input.team }]));
+    return { result, operationId: input.operationId, projectId: input.projectId, scenarioId: input.scenarioId };
+  }, { readOnlyHint: false });
+  register('set_tag_catalog', 'Replace the tag catalog; removed tags are atomically unassigned from tasks. Removing catalog entries and draft writes require UI approval.', z.object({
+    ...writeInput, tags: z.array(z.string().trim().min(1)).max(1000),
+  }).strict(), async input => {
+    const result = await planner.command(input.projectId, commandFor(input, 'setTagCatalog', [input.tags]));
+    return { result, operationId: input.operationId, projectId: input.projectId, scenarioId: input.scenarioId };
+  }, { readOnlyHint: false });
+  const intervalSchema = z.object({ start: z.string().min(1), end: z.string().min(1) }).strict();
+  register('upsert_calendar', 'Create or update a calendar in the explicit scenario or draft. Updates preserve previous calendars where required and may create duration proposals.', z.object({
+    ...writeInput, calendar: z.object({ id: z.string().min(1), name: z.string().min(1), workingDays: z.array(z.number().int()).max(7),
+      workingIntervals: z.array(intervalSchema).max(100), holidays: z.array(z.string().min(1)).max(1000),
+      exceptions: z.array(z.object({ date: z.string().min(1), intervals: z.array(intervalSchema).max(100) }).strict()).max(1000) }).strict(),
+  }).strict(), async input => {
+    const result = await planner.command(input.projectId, commandFor(input, 'upsertCalendar', [input.calendar]));
+    return { result, operationId: input.operationId, projectId: input.projectId, scenarioId: input.scenarioId };
+  }, { readOnlyHint: false });
+
+  const dependencyInput = dependencyQuerySchema.omit({ analyze: true }).extend(projectIdInput);
+  register('list_dependencies', 'List dependencies with optional endpoint, type and bounded ancestor/descendant traversal filters.', dependencyInput,
+    async ({ projectId, ...input }) => planner.queryAnalysis(projectId, 'dependencies/query', { ...input, analyze: false }), { readOnlyHint: true });
+  register('analyze_dependencies', 'List matching dependencies with calculated endpoint slack and critical flags. Multiple critical branches may exist; this is not a single critical path.', dependencyInput,
+    async ({ projectId, ...input }) => planner.queryAnalysis(projectId, 'dependencies/query', { ...input, analyze: true }), { readOnlyHint: true });
+  register('diagnose_plan', 'Report paginated informational planning diagnostics and schedule violations without modifying the project.', diagnosticQuerySchema.extend(projectIdInput),
+    async ({ projectId, ...input }) => planner.queryAnalysis(projectId, 'diagnose', input), { readOnlyHint: true });
+
+  register('list_operation_history', 'List a page of retained project audit events, newest first. Historical events not recorded by earlier versions cannot be recovered.', z.object({
+    ...projectIdInput, ...pageInput, from: z.iso.datetime({ offset: true }).optional(), to: z.iso.datetime({ offset: true }).optional(),
+    actor: z.enum(['ui', 'agent', 'system']).optional(), action: z.string().min(1).optional(), outcome: z.string().min(1).optional(),
+  }).strict().refine(value => !value.from || !value.to || Date.parse(value.from) <= Date.parse(value.to), 'Date bounds are reversed.'),
+  async ({ projectId, ...input }) => planner.queryHistory(projectId, input), { readOnlyHint: true });
+
+  register('request_import_project', 'Request importing a structured JSON project. A UI user must approve it before creation; existing project IDs are never overwritten.', z.object({
+    operationId: z.string().min(1).max(128), model: z.record(z.string(), z.unknown()),
+  }).strict(), async ({ model, operationId }) => planner.requestImport(model, operationId), { readOnlyHint: false });
+  register('get_import_status', 'Get the status of an import request by its import ID.', z.object({ importId: z.string().min(1) }).strict(),
+    async ({ importId }) => planner.getImport(importId), { readOnlyHint: true });
 
   register('compare_scenarios', 'Compare a scenario with its baseline, optionally focused on a milestone.', z.object({
     ...projectIdInput, scenarioId: z.string().min(1), milestoneId: z.string().min(1).optional(),

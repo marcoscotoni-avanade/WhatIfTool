@@ -33,6 +33,9 @@ export function DurationProposalDialog() {
   const c = useStore(connection.state), blocked = c.mode === 'connected' && (c.busy || !!c.error);
   const [selected, setSelected] = useState(() => new Set(pending?.proposals.filter(p => p.duration !== undefined).map(p => p.activityId)));
   if (!pending) return null;
+  const approval = c.approvals.find(operation => operation.status === 'pending' && operation.action === 'finishEdit'
+    && operation.expectedRevision === pending.revision && operation.scenarioId === pending.scenarioId
+    && operation.args[1] === pending.id);
   return <Modal title="Recalculate duration?" close={() => { if (!blocked) finish(); }} wide>
     <p>Select activities to recalculate. Unselected activities keep their duration and working calendar. The original edit will still be saved.</p>
     {pending.proposals.map(p => <div key={p.activityId}>
@@ -41,6 +44,15 @@ export function DurationProposalDialog() {
         <strong>{p.code}</strong> — {p.previousDuration} {p.durationUnit} → {p.duration === undefined ? p.reason : `${Number(p.duration.toPrecision(12))} ${p.durationUnit} · ${p.allocationPercent}% · ${p.calendarName}`}
       </label>
     </div>)}
+    {approval && <section aria-label="Agent duration request">
+      <h3>Agent requests a duration decision</h3>
+      <p>{approval.args[0] === null ? 'Cancel the entire edit.' : Array.isArray(approval.args[0]) && approval.args[0].length === 0
+        ? 'Keep existing durations and save the edit.'
+        : `Apply calculated durations to: ${pending.proposals.filter(p => Array.isArray(approval.args[0]) && approval.args[0].includes(p.activityId)).map(p => p.code).join(', ')}.`}</p>
+      <p>Expected revision {approval.expectedRevision} · expires {approval.expiresAt}</p>
+      <button disabled={blocked} onClick={() => void connection.decide(approval.id, true)}>Approve agent decision</button>
+      <button disabled={blocked} onClick={() => void connection.decide(approval.id, false)}>Reject agent decision</button>
+    </section>}
     <div className="dialog-actions"><button disabled={blocked} className="primary" onClick={() => finish([...selected])}>Apply selected</button>
       <button disabled={blocked} onClick={() => finish([])}>Keep durations</button><button disabled={blocked} onClick={() => finish()}>Cancel entire edit</button></div>
   </Modal>;

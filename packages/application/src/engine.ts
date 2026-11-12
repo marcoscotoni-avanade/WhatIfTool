@@ -5,7 +5,7 @@ import { command, normalize, toModel, type DocumentCommand, type DocumentState }
 import { proposeDuration, type DurationProposal } from './durationProposal';
 import { activityPatch, editableActivityFields } from './editing';
 
-export interface PendingEdit { name: string; model: ProjectModel; revision: number; scenarioId?: string; proposals: DurationProposal[] }
+export interface PendingEdit { id?: string; name: string; model: ProjectModel; revision: number; scenarioId?: string; proposals: DurationProposal[] }
 
 export interface PlannerState {
   document: DocumentState; revision: number; dirty: boolean; path?: string; activeScenarioId?: string;

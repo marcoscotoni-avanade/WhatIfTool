@@ -95,6 +95,8 @@ ELK and AG Grid are sizeable local vendor chunks; no CDN is used.
 The optional connected mode uses a local authoritative service shared by the UI and VS Code.
 Run `npm run service` and connect from the application's service connection controls.
 Run the MCP stdio adapter with `npm run mcp`, or use the workspace MCP configuration.
+The adapter also supports filtered activity search, diagnostics, metadata, dependency analysis,
+duration proposals, operation history, and JSON import requests approved in the connected UI.
 See [MCP setup, permissions and limitations](docs/mcp.md).
 
 The service persists working sessions separately from `.pgplan` exports and remains available
