@@ -1,5 +1,89 @@
 import { expect, test } from '@playwright/test';
 import ExcelJS from 'exceljs';
+import { readFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
+import { createDemo } from '@planner/domain';
+
+test('exports a large dependency map as a scalable SVG', async ({ page }, testInfo) => {
+  const project = createDemo();
+  project.activities[7]!.graphPosition = { x: 10000, y: -2000 };
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open Demo Project', exact: true }).click();
+  await page.getByRole('button', { name: 'Import / Export', exact: true }).click();
+  await page.getByRole('button', { name: 'Discard & continue', exact: true }).click();
+  await page.getByLabel('Import file').setInputFiles({
+    name: 'large-project.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)),
+  });
+  await page.getByRole('button', { name: 'Validate & import', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Export PNG', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Use Export SVG instead');
+  await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export SVG', exact: true }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('ERP Go Live-dependency-map.svg');
+  const path = testInfo.outputPath('large-map.svg');
+  await download.saveAs(path);
+  const svg = await readFile(path, 'utf8');
+  expect(svg).toContain('Data Migration');
+  expect(svg).toContain('GO LIVE');
+  expect(svg).toContain('react-flow__edge');
+  await page.goto(pathToFileURL(path).href);
+  await expect(page.locator('svg').first()).toHaveAttribute('width', /^(?:[89]\d{3}|[1-9]\d{4,})$/);
+  await expect(page.locator('.plan-node')).toHaveCount(8);
+  await expect(page.locator('.react-flow__edge-path')).toHaveCount(8);
+  await expect(page.locator('.plan-node').filter({ hasText: 'Data Migration' })).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  const distantNode = page.locator('.plan-node').filter({ hasText: 'GO LIVE' });
+  await expect(distantNode).toBeVisible();
+  await expect(distantNode).toHaveText(/GO LIVE/);
+  const screenshot = await distantNode.screenshot();
+  expect(screenshot.readUInt32BE(16)).toBeGreaterThan(200);
+  expect(screenshot.readUInt32BE(20)).toBeGreaterThan(100);
+});
+
+test('exports the dependency map as a high-resolution PNG', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open Demo Project', exact: true }).click();
+  await expect(page.locator('.plan-node')).toHaveCount(8);
+  const nodes = await page.locator('.react-flow__node').evaluateAll(elements => elements.map(element => {
+    const node = element as HTMLElement, matrix = new DOMMatrix(node.style.transform);
+    return { x: matrix.m41, y: matrix.m42, width: node.offsetWidth, height: node.offsetHeight };
+  }));
+  const left = Math.min(...nodes.map(node => node.x)), top = Math.min(...nodes.map(node => node.y));
+  const right = Math.max(...nodes.map(node => node.x + node.width)), bottom = Math.max(...nodes.map(node => node.y + node.height));
+  for (let i = 0; i < 3; i++) await page.locator('.react-flow__controls-zoomin').click();
+  await expect(page.locator('.react-flow__node')).not.toHaveCount(8);
+  const viewport = page.locator('.react-flow__viewport');
+  const transform = await viewport.evaluate(element => (element as HTMLElement).style.transform);
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export PNG', exact: true }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('ERP Go Live-dependency-map.png');
+  const path = await download.path();
+  if (!path) throw new Error('PNG download is missing.');
+  const png = await readFile(path);
+  expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  expect(png.readUInt32BE(16)).toBe(Math.ceil(right - left + 160) * 2);
+  expect(png.readUInt32BE(20)).toBe(Math.ceil(bottom - top + 160) * 2);
+  const rendered = await page.evaluate(async ({ image, nodes, left, top }) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${image}`;
+    await img.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width; canvas.height = img.height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Canvas is unavailable.');
+    context.drawImage(img, 0, 0);
+    return nodes.map(node => {
+      const pixels = context.getImageData(Math.round((node.x - left + 85) * 2), Math.round((node.y - top + 85) * 2), 20, 20).data;
+      return Array.from({ length: pixels.length / 4 }, (_, i) => pixels[i * 4]! > 240 && pixels[i * 4 + 1]! > 240 && pixels[i * 4 + 2]! > 240).filter(Boolean).length;
+    });
+  }, { image: png.toString('base64'), nodes, left, top });
+  for (const whitePixels of rendered) expect(whitePixels).toBeGreaterThan(100);
+  await expect(page.getByRole('button', { name: 'Export PNG', exact: true })).toBeEnabled();
+  await expect(viewport).toHaveAttribute('style', new RegExp(transform.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+});
 
 test('demo -> risk flow -> milestone contributions -> baseline -> what-if -> SQLite reopen', async ({ page }) => {
   const errors: string[] = [];

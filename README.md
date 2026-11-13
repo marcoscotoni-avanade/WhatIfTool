@@ -126,7 +126,11 @@ Snapshot contents remain immutable; connected operations are audited and MCP req
 UI approval.
 
 - React Flow graph: create, connect, edit edges, drag, multi-select, duplicate/delete,
-  pan/zoom, fit view, minimap, automatic ELK layout and saved manual positions. Task cards
+  pan/zoom, fit view, minimap, automatic ELK layout and saved manual positions.
+  **Export SVG** saves the entire map as a scalable image, including large maps that exceed PNG
+  canvas limits; open it in a browser such as Edge or Chrome. Its HTML-based SVG content may not
+  render in applications that do not support SVG `foreignObject`. **Export PNG** saves the entire
+  map at twice its natural size, independently of the current zoom. Task cards
   show the assigned owner and tags as chips; manage the project tag catalog in **Setup**, assign
   tags from the inspector, and filter the read-only Tags column in the Activity Grid.
 - AG Grid Community: create rows, inline edit, sort/filter, multi-select, bulk changes,

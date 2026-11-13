@@ -1,10 +1,12 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlow, Background, Controls, MiniMap, Handle, Position, MarkerType, type Node, type NodeProps, type ReactFlowInstance } from '@xyflow/react';
+import { isTauri, invoke } from '@tauri-apps/api/core';
 import type { Activity, ActivitySchedule, RiskExplanation } from '@planner/domain';
 import { getAncestors } from '@planner/scheduling';
 import { writeOverride } from '@planner/scenarios';
 import { connection, persistAction, useProjectStore } from '../store/useProjectStore';
 import { displayDate, num, riskColor, useResolved } from '../components/shared';
+import { download } from '../persistence/local';
 import '@xyflow/react/dist/style.css';
 
 type ActivityNode = Node<{ activity: Activity; ownerName?: string; schedule?: ActivitySchedule; risk?: RiskExplanation; color: string; changed: boolean; baselineDuration?: number }, 'activity'>;
@@ -41,6 +43,7 @@ const nodeTypes = { activity: PlanNode };
 export function PlanningGraph() {
   const m = useResolved(), s = useProjectStore(), [flow, setFlow] = useState<ReactFlowInstance<ActivityNode>>(),
     [drag, setDrag] = useState<Record<string, { x: number; y: number }>>({}), [layoutBusy, setLayoutBusy] = useState(false),
+    [exportFormat, setExportFormat] = useState<'png' | 'svg'>(),
     [contextMenu, setContextMenu] = useState<{ activityId?: string; graphPosition?: { x: number; y: number }; x: number; y: number }>();
   const canvas = useRef<HTMLDivElement>(null);
   const selectedId = s.selectedActivityIds.length === 1 ? s.selectedActivityIds[0] : undefined;
@@ -97,6 +100,47 @@ export function PlanningGraph() {
       labelStyle: { fontSize: 11, fill: '#243c4f' }, labelBgStyle: { fill: '#f5f8fa', fillOpacity: .96 },
     };
   }), [m.dependencies, s.results, s.riskFlow, s.selectedDependencyId, relevant]);
+  const exportGraph = async (format: 'png' | 'svg') => {
+    if (!canvas.current || !flow) throw new Error('The dependency map is not ready to export.');
+    setExportFormat(format);
+    try {
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      const viewport = canvas.current.querySelector<HTMLElement>('.react-flow__viewport');
+      const graphNodes = flow.getNodes();
+      if (!viewport || !graphNodes.length) throw new Error('There are no activities to export.');
+      if (graphNodes.some(node => {
+        const measured = flow.getInternalNode(node.id)?.measured;
+        return !measured?.width || !measured?.height;
+      }))
+        throw new Error('The dependency map is still loading. Try exporting again.');
+      const bounds = flow.getNodesBounds(graphNodes.map(node => node.id));
+      const padding = 80, pixelRatio = 2;
+      const width = Math.ceil(bounds.width + padding * 2), height = Math.ceil(bounds.height + padding * 2);
+      if (format === 'png' && (width * pixelRatio > 16384 || height * pixelRatio > 16384 || width * height * pixelRatio ** 2 > 64_000_000))
+        throw new Error('The dependency map is too large for PNG export. Use Export SVG instead.');
+      const { toBlob, toSvg } = await import('html-to-image');
+      const options = {
+        width, height,
+        cacheBust: true,
+        backgroundColor: '#edf3f7',
+        style: { width: `${width}px`, height: `${height}px`, transform: `translate(${padding - bounds.x}px, ${padding - bounds.y}px) scale(1)` },
+      };
+      const image = format === 'png'
+        ? await toBlob(viewport, { ...options, pixelRatio, skipAutoScale: true })
+        : new Blob([decodeURIComponent((await toSvg(viewport, options)).split(',')[1]!)], { type: 'image/svg+xml;charset=utf-8' });
+      if (!image) throw new Error('Could not render the dependency map as an image.');
+      const projectName = m.project.name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').trim() || 'project';
+      const filename = `${projectName}-dependency-map.${format}`;
+      const bytes = new Uint8Array(await image.arrayBuffer());
+      if (isTauri()) {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        const path = await save({ defaultPath: filename, filters: [{ name: `${format.toUpperCase()} image`, extensions: [format] }] });
+        if (path) await invoke('write_project', { path, bytes: Array.from(bytes) });
+      } else download(filename, bytes, image.type);
+    } finally {
+      setExportFormat(undefined);
+    }
+  };
   const layout = async () => {
     setLayoutBusy(true);
     try {
@@ -127,11 +171,13 @@ export function PlanningGraph() {
   };
   return <section className="graph-panel" aria-label="Dependency graph">
     <div className="panel-title"><span>DEPENDENCY MAP <small>Drag handles to connect · Shift + drag to select</small></span><div>
+      <button disabled={!flow || !!exportFormat} title="Export the full map as a scalable SVG" onClick={() => void exportGraph('svg').catch(s.report)}>{exportFormat === 'svg' ? 'Exporting...' : 'Export SVG'}</button>
+      <button disabled={!flow || !!exportFormat} title="Export the full map as a high-resolution PNG" onClick={() => void exportGraph('png').catch(s.report)}>{exportFormat === 'png' ? 'Exporting...' : 'Export PNG'}</button>
       <button disabled={immutable || layoutBusy} onClick={() => void layout()}>{layoutBusy ? 'Laying out...' : 'Auto Layout'}</button><button onClick={() => void flow?.fitView({ padding: .15, duration: 250 })}>Fit View</button></div></div>
     <div className="graph-canvas" ref={canvas} onPointerDown={event => {
       if (!(event.target instanceof Element) || !event.target.closest('.graph-context-menu')) setContextMenu(undefined);
     }}><ReactFlow<ActivityNode> nodes={nodes} edges={edges} nodeTypes={nodeTypes} onInit={setFlow}
-      minZoom={.12} maxZoom={1.7} fitView fitViewOptions={{ padding: .15 }} onlyRenderVisibleElements nodesDraggable={!immutable} nodesConnectable={!immutable}
+      minZoom={.12} maxZoom={1.7} fitView fitViewOptions={{ padding: .15 }} onlyRenderVisibleElements={!exportFormat} nodesDraggable={!immutable} nodesConnectable={!immutable}
       onNodesChange={changes => {
         const removed = changes.filter(c => c.type === 'remove').map(c => c.id);
         if (removed.length) { s.select(removed); s.deleteSelection(); return; }
